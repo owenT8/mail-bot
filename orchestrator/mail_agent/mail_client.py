@@ -2,7 +2,6 @@ import os
 from dotenv import load_dotenv
 from imap_tools import MailBox, AND
 from dataclasses import dataclass
-from mail_bot.constants import TEST_EMAILS
 
 load_dotenv()
 

@@ -1,4 +1,5 @@
-from mail_bot.telegram_client import TelegramClient
+from telegram_client import TelegramClient
+
 
 
 client = TelegramClient()
