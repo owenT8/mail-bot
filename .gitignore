@@ -1,4 +1,6 @@
 .env
 .venv
 .adk
+.db
+memory_db/
 __pycache__
