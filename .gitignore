@@ -1,6 +1,6 @@
 .env
 .venv
 .adk
-.db
+mailbot.db
 memory_db/
 __pycache__
