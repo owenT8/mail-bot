@@ -2,7 +2,7 @@ from google.adk.agents.llm_agent import Agent
 from google.adk.models.lite_llm import LiteLlm
 
 from orchestrator.constants import EMAIL_AGENT_PROMPT
-from orchestrator.mail_agent.mail_client import MailClient
+from orchestrator.agents.mail_agent.mail_client import MailClient
 
 
 class MailAgent:
@@ -22,7 +22,7 @@ class MailAgent:
 
         self.gmail_client = MailClient()
         self.agent = Agent(
-            model=LiteLlm(model="ollama_chat/qwen3:8b"),
+            model='gemini-3-flash-preview',
             name="EmailAgent",
             description="Reads and summarizes my emails.",
             instruction=EMAIL_AGENT_PROMPT,
