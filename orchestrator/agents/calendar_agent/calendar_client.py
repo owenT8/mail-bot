@@ -59,12 +59,18 @@ class CalendarClient:
         would silently break every operation if it changed server-side, and the
         extra round-trip is negligible for a single user.
         """
-        principal = client.principal()
-        if self.calendar_name:
-            return principal.calendar(name=self.calendar_name)
-        calendars = principal.calendars()
+        calendars = client.principal().calendars()
         if not calendars:
             raise RuntimeError("No calendars found for this iCloud account.")
+        if self.calendar_name:
+            for cal in calendars:
+                if cal.get_display_name() == self.calendar_name:
+                    return cal
+            available = ", ".join(repr(c.get_display_name()) for c in calendars)
+            raise RuntimeError(
+                f"CALDAV_CALENDAR={self.calendar_name!r} did not match any "
+                f"calendar. Available calendars: {available}"
+            )
         return calendars[0]
 
     def _find_event(self, client: caldav.DAVClient, uid: str):
@@ -81,11 +87,10 @@ class CalendarClient:
         start = now - timedelta(days=1825)  # ~5 years back
         end = now + timedelta(days=1825)    # ~5 years ahead
 
-        principal = client.principal()
         if self.calendar_name:
-            calendars = [principal.calendar(name=self.calendar_name)]
+            calendars = [self._calendar(client)]
         else:
-            calendars = principal.calendars()
+            calendars = client.principal().calendars()
 
         for cal in calendars:
             try:
