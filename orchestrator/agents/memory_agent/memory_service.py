@@ -222,6 +222,9 @@ class ChromaMemoryService(BaseMemoryService):
             where={"user_id": user_id},
         )
 
+        for doc, dist in zip(results["documents"][0], results["distances"][0]):
+            logger.info(f"{dist:.4f}  {doc}")
+
         docs = results.get("documents", [[]])[0]
         ids = results.get("ids", [[]])[0]
         metas = results.get("metadatas", [[]])[0]

@@ -175,7 +175,7 @@ class TelegramClient:
         for i, session in enumerate(sessions[:MAX_SESSIONS_LISTED], start=1):
             marker = " ← active" if session.id == active_id else ""
             name = self.agent.session_name(session) or "(unnamed)"
-            lines.append(f"{i}. <b>{name}</b>{marker}\n   <code>{session.id}</code>")
+            lines.append(f"{i}. <b>{name}</b>{marker}\n")
         lines.append("\nUse /opensession &lt;n|name&gt; to resume one.")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
