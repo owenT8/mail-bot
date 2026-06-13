@@ -23,8 +23,16 @@ class CalendarAgent:
 
         self.client = CalendarClient()
 
+        async def list_calendars() -> list[str]:
+            """List the names of all the user's calendars.
+
+            Use this to learn which calendars exist (e.g. "Home", "Work",
+            "School") so you can pick the right one when creating an event.
+            """
+            return await asyncio.to_thread(self.client.list_calendars)
+
         async def list_events(start_iso: str, end_iso: str) -> list[dict]:
-            """List calendar events in a time window.
+            """List calendar events in a time window, across all calendars.
 
             Args:
                 start_iso: Window start as an ISO-8601 datetime (e.g.
@@ -32,7 +40,8 @@ class CalendarAgent:
                 end_iso: Window end (exclusive), same format as start_iso.
 
             Returns a list of events, each a dict with keys: uid, title,
-            start, end, all_day, location, description. Empty list if none.
+            calendar (which calendar it's on), start, end, all_day, location,
+            description. Empty list if none.
             """
             return await asyncio.to_thread(
                 self.client.list_events, start_iso, end_iso
@@ -45,6 +54,7 @@ class CalendarAgent:
             description: str = "",
             location: str = "",
             all_day: bool = False,
+            calendar: str = "",
         ) -> str:
             """Create a calendar event and return its new uid.
 
@@ -58,6 +68,8 @@ class CalendarAgent:
                 description: Optional notes; "" means none.
                 location: Optional location; "" means none.
                 all_day: True for an all-day event (uses dates, not times).
+                calendar: Which calendar to add the event to (a name from
+                    list_calendars). "" uses the user's default calendar.
             """
             return await asyncio.to_thread(
                 self.client.create_event,
@@ -67,6 +79,7 @@ class CalendarAgent:
                 description or None,
                 location or None,
                 all_day,
+                calendar or None,
             )
 
         async def update_event(
@@ -108,7 +121,13 @@ class CalendarAgent:
             name="CalendarAgent",
             description="Reads and manages my calendar events.",
             instruction=CALENDAR_AGENT_PROMPT,
-            tools=[list_events, create_event, update_event, delete_event],
+            tools=[
+                list_calendars,
+                list_events,
+                create_event,
+                update_event,
+                delete_event,
+            ],
         )
 
     def getAgent(self):

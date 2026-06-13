@@ -21,6 +21,10 @@ class CalendarClient:
     nothing connects at construction, and every operation opens a fresh
     connection through a context manager so the HTTP session is always closed.
 
+    Multiple calendars are supported: reads span all calendars and each event is
+    tagged with the calendar it lives on, while the agent chooses which calendar
+    to write to (falling back to CALDAV_CALENDAR, then the first calendar).
+
     Writes go straight to iCloud over CalDAV, which is how they sync to the
     user's Apple Calendar on every device — there is no separate sync step.
     """
@@ -29,11 +33,12 @@ class CalendarClient:
         self.username = os.getenv("CALDAV_USERNAME")
         self.password = os.getenv("CALDAV_PASSWORD")
         self.url = os.getenv("CALDAV_URL", DEFAULT_CALDAV_URL)
-        self.calendar_name = os.getenv("CALDAV_CALENDAR")  # None -> primary
+        # Default calendar for new events when the agent doesn't pick one.
+        self.default_calendar_name = os.getenv("CALDAV_CALENDAR")
         self.tz_name = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
 
     # ------------------------------------------------------------------
-    # Connection
+    # Connection / calendar resolution
     # ------------------------------------------------------------------
 
     def _client(self) -> caldav.DAVClient:
@@ -52,47 +57,46 @@ class CalendarClient:
             url=self.url, username=self.username, password=self.password
         )
 
-    def _calendar(self, client: caldav.DAVClient):
-        """Resolve the target calendar fresh each call.
-
-        We re-discover rather than cache the calendar URL: a cached iCloud URL
-        would silently break every operation if it changed server-side, and the
-        extra round-trip is negligible for a single user.
-        """
+    def _all_calendars(self, client: caldav.DAVClient):
         calendars = client.principal().calendars()
         if not calendars:
             raise RuntimeError("No calendars found for this iCloud account.")
-        if self.calendar_name:
-            for cal in calendars:
-                if cal.get_display_name() == self.calendar_name:
-                    return cal
-            available = ", ".join(repr(c.get_display_name()) for c in calendars)
-            raise RuntimeError(
-                f"CALDAV_CALENDAR={self.calendar_name!r} did not match any "
-                f"calendar. Available calendars: {available}"
-            )
+        return calendars
+
+    def _match_calendar(self, calendars, name: str):
+        for cal in calendars:
+            if cal.get_display_name() == name:
+                return cal
+        available = ", ".join(repr(c.get_display_name()) for c in calendars)
+        raise RuntimeError(
+            f"Calendar {name!r} did not match any calendar. "
+            f"Available calendars: {available}"
+        )
+
+    def _calendar_by_name(self, client: caldav.DAVClient, name: str):
+        return self._match_calendar(self._all_calendars(client), name)
+
+    def _default_calendar(self, client: caldav.DAVClient):
+        """The calendar to write to when the agent doesn't specify one."""
+        calendars = self._all_calendars(client)
+        if self.default_calendar_name:
+            return self._match_calendar(calendars, self.default_calendar_name)
         return calendars[0]
 
     def _find_event(self, client: caldav.DAVClient, uid: str):
-        """Locate an event by UID, robust against iCloud's query quirks.
+        """Locate an event by UID across all calendars.
 
         On iCloud, both the server-side UID search (event_by_uid) and the
         open-ended events() listing are unreliable and return nothing — only a
         bounded time-range search works (that's what list_events uses). So we
-        scan a wide date window and match the UID client-side. We check every
-        calendar (unless one is pinned via CALDAV_CALENDAR) in case the event
-        isn't in the primary one.
+        scan a wide date window and match the UID client-side, across every
+        calendar (the event could live on any of them).
         """
         now = datetime.now(self._zone())
         start = now - timedelta(days=1825)  # ~5 years back
         end = now + timedelta(days=1825)    # ~5 years ahead
 
-        if self.calendar_name:
-            calendars = [self._calendar(client)]
-        else:
-            calendars = client.principal().calendars()
-
-        for cal in calendars:
+        for cal in self._all_calendars(client):
             try:
                 results = cal.search(start=start, end=end, event=True)
             except Exception:
@@ -140,39 +144,50 @@ class CalendarClient:
     # CRUD operations
     # ------------------------------------------------------------------
 
+    def list_calendars(self) -> list[str]:
+        """Return the display names of all the user's calendars."""
+        with self._client() as client:
+            return [cal.get_display_name() for cal in self._all_calendars(client)]
+
     def list_events(self, start_iso: str, end_iso: str) -> list[dict]:
-        """Return events overlapping the window [start_iso, end_iso)."""
+        """Return events overlapping [start_iso, end_iso) across all calendars."""
         start = self._to_dt(start_iso)
         end = self._to_dt(end_iso)
+        events = []
         with self._client() as client:
-            results = self._calendar(client).search(
-                start=start, end=end, event=True, expand=True
-            )
-            events = []
-            for item in results:
-                comp = item.icalendar_component
-                if comp is None:
+            for cal in self._all_calendars(client):
+                cal_name = cal.get_display_name()
+                try:
+                    results = cal.search(
+                        start=start, end=end, event=True, expand=True
+                    )
+                except Exception:
                     continue
-                dtstart = comp.get("dtstart")
-                dtend = comp.get("dtend")
-                start_val = dtstart.dt if dtstart is not None else None
-                end_val = dtend.dt if dtend is not None else None
-                all_day = isinstance(start_val, date) and not isinstance(
-                    start_val, datetime
-                )
-                events.append(
-                    {
-                        "uid": str(comp.get("uid", "")),
-                        "title": str(comp.get("summary", "")),
-                        "start": self._iso(start_val) if start_val else "",
-                        "end": self._iso(end_val) if end_val else "",
-                        "all_day": all_day,
-                        "location": str(comp.get("location", "")),
-                        "description": str(comp.get("description", "")),
-                    }
-                )
-            events.sort(key=lambda e: e["start"])
-            return events
+                for item in results:
+                    comp = item.icalendar_component
+                    if comp is None:
+                        continue
+                    dtstart = comp.get("dtstart")
+                    dtend = comp.get("dtend")
+                    start_val = dtstart.dt if dtstart is not None else None
+                    end_val = dtend.dt if dtend is not None else None
+                    all_day = isinstance(start_val, date) and not isinstance(
+                        start_val, datetime
+                    )
+                    events.append(
+                        {
+                            "uid": str(comp.get("uid", "")),
+                            "title": str(comp.get("summary", "")),
+                            "calendar": cal_name,
+                            "start": self._iso(start_val) if start_val else "",
+                            "end": self._iso(end_val) if end_val else "",
+                            "all_day": all_day,
+                            "location": str(comp.get("location", "")),
+                            "description": str(comp.get("description", "")),
+                        }
+                    )
+        events.sort(key=lambda e: e["start"])
+        return events
 
     def create_event(
         self,
@@ -182,8 +197,13 @@ class CalendarClient:
         description: str | None = None,
         location: str | None = None,
         all_day: bool = False,
+        calendar: str | None = None,
     ) -> str:
-        """Create an event and return its new uid."""
+        """Create an event and return its new uid.
+
+        If `calendar` (a display name) is given, the event is added there;
+        otherwise it goes to the default calendar (CALDAV_CALENDAR or the first).
+        """
         new_uid = str(uuid.uuid4())
         start = self._to_dt(start_iso, all_day)
         end = self._to_dt(end_iso, all_day)
@@ -209,7 +229,11 @@ class CalendarClient:
         cal.add_component(vevent)
 
         with self._client() as client:
-            self._calendar(client).save_event(cal.to_ical().decode())
+            if calendar:
+                target = self._calendar_by_name(client, calendar)
+            else:
+                target = self._default_calendar(client)
+            target.save_event(cal.to_ical().decode())
         return new_uid
 
     def update_event(

@@ -51,7 +51,9 @@ GOOGLE_API_KEY=...         # Gemini API key used by ADK + session compression
 CALDAV_USERNAME=you@icloud.com   # your Apple ID
 CALDAV_PASSWORD=...              # an Apple *app-specific password* (see below)
 # CALDAV_URL=https://caldav.icloud.com   # optional, this is the default
-# CALDAV_CALENDAR=Home                   # optional; defaults to your primary calendar
+# CALDAV_CALENDAR=Home                   # optional default calendar for NEW events;
+                                         # reads always span all calendars and the
+                                         # agent picks a calendar per event
 
 # Your timezone (IANA name). Drives how naive times like "3pm" are interpreted
 # and the current date/time injected into the agents.
