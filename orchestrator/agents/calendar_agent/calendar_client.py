@@ -140,6 +140,32 @@ class CalendarClient:
     def _iso(value) -> str:
         return value.isoformat()
 
+    @staticmethod
+    def _is_date(value) -> bool:
+        return isinstance(value, date) and not isinstance(value, datetime)
+
+    def _normalize_range(self, start, end):
+        """Make DTEND consistent with DTSTART and ensure a positive duration.
+
+        iCloud rejects zero-duration events (and mismatched date/datetime
+        DTSTART/DTEND) with a 500. This guarantees:
+        - all-day (date) events: DTEND is a date, exclusive, at least start + 1 day.
+        - timed events: DTEND is a datetime strictly after start (default +1 hour).
+        """
+        if self._is_date(start):
+            if not self._is_date(end):
+                end = end.date()
+            if end <= start:
+                end = start + timedelta(days=1)
+        else:
+            if self._is_date(end):
+                end = datetime.combine(
+                    end, datetime.min.time(), tzinfo=start.tzinfo
+                )
+            if end <= start:
+                end = start + timedelta(hours=1)
+        return start, end
+
     # ------------------------------------------------------------------
     # CRUD operations
     # ------------------------------------------------------------------
@@ -207,10 +233,7 @@ class CalendarClient:
         new_uid = str(uuid.uuid4())
         start = self._to_dt(start_iso, all_day)
         end = self._to_dt(end_iso, all_day)
-
-        # All-day DTEND is exclusive: ensure it is at least the day after start.
-        if all_day and isinstance(end, date) and end <= start:
-            end = start + timedelta(days=1)
+        start, end = self._normalize_range(start, end)
 
         vevent = IEvent()
         vevent.add("uid", new_uid)
