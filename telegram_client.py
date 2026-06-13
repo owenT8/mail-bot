@@ -4,6 +4,7 @@ import os
 
 from dotenv import load_dotenv
 from telegram import Update, constants
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 from agent_service import AgentService
@@ -16,18 +17,30 @@ MAX_SESSIONS_LISTED = 10
 
 class TelegramClient:
     def __init__(self):
-        self.bot_id = os.getenv("TELEGRAM_TOKEN")
-        self.me_id = int(os.getenv("TELEGRAM_USER_ID"))
+        token = os.getenv("TELEGRAM_TOKEN")
+        user_id = os.getenv("TELEGRAM_USER_ID")
+        if not token or not user_id:
+            raise RuntimeError(
+                "TELEGRAM_TOKEN and TELEGRAM_USER_ID must be set in the environment."
+            )
+        self.bot_id = token
+        self.me_id = int(user_id)
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         self.agent = AgentService()
 
     async def sendMessage(self, update: Update, text: str) -> None:
+        if not text or not text.strip():
+            text = "(No response was produced.)"
         for i in range(0, len(text), MAX_TELEGRAM_LENGTH):
-            await update.message.reply_text(
-                text[i : i + MAX_TELEGRAM_LENGTH],
-                parse_mode="HTML",
-            )
+            chunk = text[i : i + MAX_TELEGRAM_LENGTH]
+            try:
+                await update.message.reply_text(chunk, parse_mode="HTML")
+            except BadRequest:
+                # Model/email content can contain characters that aren't valid
+                # HTML entities (raw <, >, &). Retry the chunk as plain text so
+                # the message is never silently dropped.
+                await update.message.reply_text(chunk)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.logger.info("Start command sent")
@@ -49,12 +62,19 @@ class TelegramClient:
         )
 
     async def _typing_loop(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        while True:
-            await context.bot.send_chat_action(
-                chat_id=chat_id,
-                action=constants.ChatAction.TYPING,
-            )
-            await asyncio.sleep(4)
+        try:
+            while True:
+                await context.bot.send_chat_action(
+                    chat_id=chat_id,
+                    action=constants.ChatAction.TYPING,
+                )
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A transient failure to show the typing indicator shouldn't crash
+            # the request it's attached to.
+            self.logger.warning("Typing indicator loop stopped early", exc_info=True)
 
     async def _run_with_typing(
         self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message: str
@@ -187,6 +207,16 @@ class TelegramClient:
             reverse=True,
         )
 
+    async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self.logger.error("Error handling update", exc_info=context.error)
+        if isinstance(update, Update) and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "⚠️ Something went wrong handling that. Please try again."
+                )
+            except Exception:
+                self.logger.warning("Failed to notify user of error", exc_info=True)
+
     def run(self) -> None:
         self.logger.info("Starting Telegram Bot...")
         app = Application.builder().token(self.bot_id).build()
@@ -203,5 +233,7 @@ class TelegramClient:
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, self.textMessage)
         )
+
+        app.add_error_handler(self._on_error)
 
         app.run_polling(allowed_updates=Update.ALL_TYPES)

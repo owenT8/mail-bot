@@ -1,7 +1,7 @@
 from google.adk.agents.llm_agent import Agent
 
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
-from orchestrator.constants import MEMORY_AGENT_PROMPT
+from orchestrator.constants import MEMORY_AGENT_PROMPT, MODEL
 
 
 class MemoryAgent:
@@ -23,7 +23,7 @@ class MemoryAgent:
             )
         self._initialized = True
         self.agent = Agent(
-            model="gemini-3-flash-preview",
+            model=MODEL,
             name="MemoryAgent",
             description="Manages memory and context for the user.",
             instruction=MEMORY_AGENT_PROMPT,

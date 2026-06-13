@@ -8,6 +8,7 @@ Dependencies:
     pip install chromadb google-adk
 """
 
+import asyncio
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions import Session
 from google.adk.tools import ToolContext
 from google.genai.types import Content, Part
+
+from orchestrator.constants import MEMORY_COMPRESSION_PROMPT, MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,23 @@ class ChromaMemoryService(BaseMemoryService):
     # ------------------------------------------------------------------
 
     async def add_session_to_memory(self, session: Session) -> None:
-        chunks = self._chunk_session(session)
+        # Prefer LLM compression (extract durable facts); fall back to raw
+        # turn-chunking if the model call fails or yields nothing.
+        chunks = None
+        source = "session_close_llm"
+        try:
+            chunks = await asyncio.to_thread(self._compress_session_llm, session)
+        except Exception:
+            logger.exception(
+                f"LLM compression failed for session {session.id}; "
+                "falling back to raw chunking."
+            )
+            chunks = None
+
+        if not chunks:
+            chunks = self._chunk_session(session)
+            source = "session_close"
+
         if not chunks:
             logger.info(f"Session {session.id} had no embeddable content.")
             return
@@ -84,10 +103,12 @@ class ChromaMemoryService(BaseMemoryService):
                     "session_id": session.id,
                     "memory_type": chunk.get("memory_type", "task_context"),
                     "timestamp": chunk["timestamp"],
-                    "source": "session_close",
+                    "source": source,
                 }],
             )
-        logger.info(f"Committed {len(chunks)} chunks from session {session.id}")
+        logger.info(
+            f"Committed {len(chunks)} chunks from session {session.id} (source={source})"
+        )
 
     async def search_memory(
         self,
@@ -290,6 +311,66 @@ class ChromaMemoryService(BaseMemoryService):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _session_transcript(self, session: Session) -> str:
+        """Render the session's user/model turns as a plain-text transcript."""
+        lines = []
+        for event in session.events:
+            if not event.content or not event.content.parts:
+                continue
+            role = getattr(event.content, "role", None) or getattr(event, "author", None)
+            if role not in ("user", "model"):
+                continue
+            text_parts = [
+                p.text for p in event.content.parts
+                if getattr(p, "text", None) and p.text.strip()
+            ]
+            text = " ".join(text_parts).strip()
+            if not text:
+                continue
+            lines.append(f"{role}: {text}")
+        return "\n".join(lines)
+
+    def _compress_session_llm(self, session: Session) -> Optional[list[dict]]:
+        """Use the LLM to distil a session into durable memory chunks.
+
+        Returns a list of {text, memory_type, timestamp} dicts, or None if
+        there is nothing to compress. Raises on model/transport errors so the
+        caller can fall back to mechanical chunking.
+        """
+        transcript = self._session_transcript(session)
+        if not transcript:
+            return None
+
+        # Imported lazily so a missing/edge SDK install can't break module import.
+        from google import genai
+
+        client = genai.Client()
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=f"{MEMORY_COMPRESSION_PROMPT}\n\n<transcript>\n{transcript}\n</transcript>",
+        )
+        text = (response.text or "").strip()
+        if not text or text.upper() == "NONE":
+            return None
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        chunks = []
+        for line in text.splitlines():
+            line = line.strip().lstrip("-*").strip()
+            if not line:
+                continue
+            mtype, sep, fact = line.partition(":")
+            mtype = mtype.strip().lower()
+            fact = fact.strip()
+            if not sep or mtype not in MEMORY_TYPES:
+                # No recognisable type prefix — keep the whole line as context.
+                mtype, fact = "task_context", line
+            if len(fact) < 3:
+                continue
+            chunks.append({"text": fact, "memory_type": mtype, "timestamp": timestamp})
+
+        return chunks or None
 
     def _chunk_session(self, session: Session) -> list[dict]:
         """Extract substantive user/model turns from a session's events."""
