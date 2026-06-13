@@ -86,6 +86,30 @@ Then message your bot on Telegram. `/start` prints the available commands:
 | `/rename <name>` | Rename the active session |
 | `/sessions` | List your recent sessions |
 
+## Adding a new skill
+
+Specialists are registered in one place: `orchestrator/registry.py`. To add a skill:
+
+1. Create `orchestrator/agents/<name>_agent/` with a `build_<name>_agent()` that
+   returns a `google.adk` `Agent` (mirror `mail_agent.py`; put any external I/O in a
+   `<name>_client.py` like `mail_client.py`). Tools are async functions wrapping the
+   client via `asyncio.to_thread`.
+2. Add one `Specialist(...)` entry to `SPECIALISTS` in `registry.py` with its `name`,
+   a `when_to_use` line, and the builder. Use `kind="tool"` to expose it as a tool
+   instead of a delegated sub-agent.
+
+That's it — `build_root_agent` wires it into the tree and the orchestrator prompt's
+`<team>` section is generated from the registry, so there's nothing else to keep in sync.
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+Smoke tests in `tests/` build the real agent tree (no network/LLM) and assert every
+registered specialist is wired in with valid tools — run them after changing wiring.
+
 ## Notes
 
 - `mailbot.db` and `memory_db/` are runtime artifacts and are gitignored.

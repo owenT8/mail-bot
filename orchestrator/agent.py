@@ -5,12 +5,9 @@ from zoneinfo import ZoneInfo
 from google.adk.agents.llm_agent import Agent
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from orchestrator.agents.calendar_agent.calendar_agent import CalendarAgent
-from orchestrator.agents.mail_agent.mail_agent import MailAgent
-from orchestrator.agents.memory_agent.memory_agent import MemoryAgent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
-from orchestrator.agents.search_agent import search_agent
 from orchestrator.constants import MODEL, ORCHESTRATOR_PROMPT
+from orchestrator.registry import SPECIALISTS, AgentContext, render_team
 
 DEFAULT_TIMEZONE = "America/Denver"
 
@@ -32,16 +29,25 @@ def _datetime_global_instruction(ctx: ReadonlyContext) -> str:
 
 
 def build_root_agent(memory_service: ChromaMemoryService) -> Agent:
+    ctx = AgentContext(memory_service=memory_service)
+
+    sub_agents = []
+    tools = []
+    for spec in SPECIALISTS:
+        built = spec.build(ctx)
+        if spec.kind == "tool":
+            tools.append(built)
+        else:
+            sub_agents.append(built)
+
+    instruction = ORCHESTRATOR_PROMPT.replace("{{TEAM}}", render_team())
+
     return Agent(
         model=MODEL,
         name="Orchestrator",
         description="Main coordinator that routes user requests to the appropriate specialist.",
-        instruction=ORCHESTRATOR_PROMPT,
+        instruction=instruction,
         global_instruction=_datetime_global_instruction,
-        sub_agents=[
-            MailAgent().getAgent(),
-            MemoryAgent(memory_service).getAgent(),
-            CalendarAgent().getAgent(),
-        ],
-        tools=[search_agent],
+        sub_agents=sub_agents,
+        tools=tools,
     )
