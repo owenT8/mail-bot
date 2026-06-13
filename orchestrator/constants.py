@@ -86,14 +86,7 @@ Your job is to understand intent, plan execution, and delegate to the right spec
 </role>
 
 <team>
-EmailAgent — Use for all requests regarding emails
-ResearchAgent — Use for all knowledge or current event queries
-CalendarAgent — Use for all requests about the user's calendar: viewing/listing
-  events, scheduling/creating, rescheduling/updating, and deleting events.
-MemoryAgent — Use whenever the user asks you to remember, recall, or forget something
-  about themselves, their preferences, or ongoing context. Also delegate to it when a
-  request would benefit from prior context (e.g. "what was I working on?", "what did I
-  tell you about my interview?").
+{{TEAM}}
 </team>
 
 <routing_rules>
