@@ -67,25 +67,35 @@ class CalendarClient:
             raise RuntimeError("No calendars found for this iCloud account.")
         return calendars[0]
 
-    def _find_event(self, cal, uid: str):
-        """Locate an event by UID, robust against iCloud's flaky UID search.
+    def _find_event(self, client: caldav.DAVClient, uid: str):
+        """Locate an event by UID, robust against iCloud's query quirks.
 
-        iCloud's server-side UID search (used by event_by_uid) frequently
-        returns nothing, which breaks update/delete. We try the fast lookup
-        first, then fall back to scanning the calendar's events and matching
-        the UID client-side (the same listing path that read uses, which works).
+        On iCloud, both the server-side UID search (event_by_uid) and the
+        open-ended events() listing are unreliable and return nothing — only a
+        bounded time-range search works (that's what list_events uses). So we
+        scan a wide date window and match the UID client-side. We check every
+        calendar (unless one is pinned via CALDAV_CALENDAR) in case the event
+        isn't in the primary one.
         """
-        try:
-            event = cal.get_event_by_uid(uid)
-            if event is not None:
-                return event
-        except Exception:
-            pass
+        now = datetime.now(self._zone())
+        start = now - timedelta(days=1825)  # ~5 years back
+        end = now + timedelta(days=1825)    # ~5 years ahead
 
-        for event in cal.events():
-            comp = event.icalendar_component
-            if comp is not None and str(comp.get("uid", "")) == uid:
-                return event
+        principal = client.principal()
+        if self.calendar_name:
+            calendars = [principal.calendar(name=self.calendar_name)]
+        else:
+            calendars = principal.calendars()
+
+        for cal in calendars:
+            try:
+                results = cal.search(start=start, end=end, event=True)
+            except Exception:
+                continue
+            for event in results:
+                comp = event.icalendar_component
+                if comp is not None and str(comp.get("uid", "")) == uid:
+                    return event
 
         raise RuntimeError(f"No calendar event found with uid {uid!r}.")
 
@@ -209,7 +219,7 @@ class CalendarClient:
     ) -> str:
         """Update only the provided fields of an existing event (by uid)."""
         with self._client() as client:
-            event = self._find_event(self._calendar(client), uid)
+            event = self._find_event(client, uid)
             comp = event.icalendar_component
             is_all_day = (
                 all_day
@@ -246,5 +256,5 @@ class CalendarClient:
     def delete_event(self, uid: str) -> str:
         """Delete an event by uid."""
         with self._client() as client:
-            self._find_event(self._calendar(client), uid).delete()
+            self._find_event(client, uid).delete()
         return f"Deleted event {uid}."
