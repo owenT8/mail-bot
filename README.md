@@ -1,9 +1,11 @@
 # mail-bot — "Trail Guide"
 
-A personal, single-user **Telegram email assistant** built on **Google ADK** with
-Gemini models. An orchestrator agent routes your chat messages to specialist agents:
+A personal, single-user **Telegram email & calendar assistant** built on **Google ADK**
+with Gemini models. An orchestrator agent routes your chat messages to specialist agents:
 
 - **EmailAgent** — reads/summarizes unread Gmail (IMAP) and can archive/move messages.
+- **CalendarAgent** — reads and fully manages (create / update / delete) your Apple
+  Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
 - **ResearchAgent** — answers knowledge / current-event questions via Google Search.
 
@@ -44,11 +46,28 @@ TELEGRAM_USER_ID=...      # your numeric Telegram user id (only this user is all
 GOOGLE_USER=you@gmail.com
 GOOGLE_PASSWORD=...        # a Gmail *app password* (not your account password)
 GOOGLE_API_KEY=...         # Gemini API key used by ADK + session compression
+
+# Calendar (Apple iCloud over CalDAV)
+CALDAV_USERNAME=you@icloud.com   # your Apple ID
+CALDAV_PASSWORD=...              # an Apple *app-specific password* (see below)
+# CALDAV_URL=https://caldav.icloud.com   # optional, this is the default
+# CALDAV_CALENDAR=Home                   # optional default calendar for NEW events;
+                                         # reads always span all calendars and the
+                                         # agent picks a calendar per event
+
+# Your timezone (IANA name). Drives how naive times like "3pm" are interpreted
+# and the current date/time injected into the agents.
+TIMEZONE=America/Denver
 ```
 
 > The Gemini credentials are consumed by Google ADK and the genai SDK. If you use
 > Vertex AI instead of an API key, set the standard `GOOGLE_GENAI_USE_VERTEXAI` /
 > project env vars that ADK expects.
+>
+> **Apple app-specific password:** iCloud requires two-factor auth, so a normal
+> password won't work over CalDAV. Generate one at
+> [appleid.apple.com](https://appleid.apple.com) → *Sign-In & Security* →
+> *App-Specific Passwords*, and use it as `CALDAV_PASSWORD`.
 
 ## Run
 
@@ -70,4 +89,8 @@ Then message your bot on Telegram. `/start` prints the available commands:
 ## Notes
 
 - `mailbot.db` and `memory_db/` are runtime artifacts and are gitignored.
-- `gemini-3-flash-preview` is a preview model — bump `MODEL` in `constants.py` when it rotates.
+- The Gemini model is set once via `MODEL` in `orchestrator/constants.py` (currently
+  `gemini-3.5-flash`) — bump it there when the model rotates.
+- Calendar changes are written straight to iCloud over CalDAV, so they sync to all your
+  Apple devices automatically. Calendar create/update/delete are performed without a
+  confirmation prompt; email send/archive still require confirmation.

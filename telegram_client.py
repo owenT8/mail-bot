@@ -26,6 +26,10 @@ class TelegramClient:
         self.bot_id = token
         self.me_id = int(user_id)
         logging.basicConfig(level=logging.INFO)
+        # httpx logs full request URLs at INFO, which includes the Telegram bot
+        # token (https://api.telegram.org/bot<TOKEN>/...). Quiet it so secrets
+        # don't end up in logs.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         self.logger = logging.getLogger(__name__)
         self.agent = AgentService()
 
