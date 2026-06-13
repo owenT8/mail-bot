@@ -39,11 +39,27 @@ class AgentService:
                 return session_id
             self._active_sessions.pop(user_id, None)
 
+        # The active-session pointer is in-memory only, so after a restart it's
+        # empty. Rather than silently starting a new session, resume the user's
+        # most recently updated one if they have any.
+        recent = self._sort_sessions(await self.list_sessions(user_id))
+        if recent:
+            self._active_sessions[user_id] = recent[0].id
+            return recent[0].id
+
         session = await self.session_service.create_session(
             app_name=APP_NAME, user_id=user_id
         )
         self._active_sessions[user_id] = session.id
         return session.id
+
+    @staticmethod
+    def _sort_sessions(sessions: list[Session]) -> list[Session]:
+        return sorted(
+            sessions,
+            key=lambda s: getattr(s, "last_update_time", 0) or 0,
+            reverse=True,
+        )
 
     async def send(self, user_id: str, message: str) -> str:
         session_id = await self._get_or_create_active_session(user_id)

@@ -1,7 +1,7 @@
 [project]
 name = "mail-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Personal Telegram email assistant built on Google ADK + Gemini."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
