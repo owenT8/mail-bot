@@ -4,6 +4,7 @@ from google.adk.agents.llm_agent import Agent
 
 from orchestrator.constants import CALENDAR_AGENT_PROMPT, MODEL
 from orchestrator.agents.calendar_agent.calendar_client import CalendarClient
+from orchestrator.time_context import datetime_global_instruction
 
 
 def build_calendar_agent() -> Agent:
@@ -105,6 +106,7 @@ def build_calendar_agent() -> Agent:
         name="CalendarAgent",
         description="Reads and manages my calendar events.",
         instruction=CALENDAR_AGENT_PROMPT,
+        global_instruction=datetime_global_instruction,
         tools=[
             list_calendars,
             list_events,
