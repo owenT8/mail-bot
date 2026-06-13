@@ -67,6 +67,28 @@ class CalendarClient:
             raise RuntimeError("No calendars found for this iCloud account.")
         return calendars[0]
 
+    def _find_event(self, cal, uid: str):
+        """Locate an event by UID, robust against iCloud's flaky UID search.
+
+        iCloud's server-side UID search (used by event_by_uid) frequently
+        returns nothing, which breaks update/delete. We try the fast lookup
+        first, then fall back to scanning the calendar's events and matching
+        the UID client-side (the same listing path that read uses, which works).
+        """
+        try:
+            event = cal.get_event_by_uid(uid)
+            if event is not None:
+                return event
+        except Exception:
+            pass
+
+        for event in cal.events():
+            comp = event.icalendar_component
+            if comp is not None and str(comp.get("uid", "")) == uid:
+                return event
+
+        raise RuntimeError(f"No calendar event found with uid {uid!r}.")
+
     # ------------------------------------------------------------------
     # Time handling
     # ------------------------------------------------------------------
@@ -187,7 +209,7 @@ class CalendarClient:
     ) -> str:
         """Update only the provided fields of an existing event (by uid)."""
         with self._client() as client:
-            event = self._calendar(client).event_by_uid(uid)
+            event = self._find_event(self._calendar(client), uid)
             comp = event.icalendar_component
             is_all_day = (
                 all_day
@@ -224,5 +246,5 @@ class CalendarClient:
     def delete_event(self, uid: str) -> str:
         """Delete an event by uid."""
         with self._client() as client:
-            self._calendar(client).event_by_uid(uid).delete()
+            self._find_event(self._calendar(client), uid).delete()
         return f"Deleted event {uid}."
