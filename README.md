@@ -117,6 +117,28 @@ calendar) is pushed daily at 08:00 (your `TIMEZONE`) by default — change it wi
 Preferences persist across restarts in `telegram_state.pkl` (gitignored). Inbox button taps
 act directly on the mailbox (no LLM), so they're instant.
 
+## Run as a service (systemd)
+
+A unit file is provided at [`deploy/mailbot.service`](deploy/mailbot.service) (runs as the
+`owentaylor` user via the venv built by `uv sync`). Install it as a system service:
+
+```bash
+uv sync                                   # build/refresh .venv first
+sudo cp deploy/mailbot.service /etc/systemd/system/mailbot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now mailbot       # start now + on every boot
+systemctl status mailbot                  # check it's running
+journalctl -u mailbot -f                  # follow logs
+```
+
+After pulling code changes: `uv sync && sudo systemctl restart mailbot`.
+
+If your paths/username differ, edit `User`, `WorkingDirectory`, and `ExecStart` in the unit.
+Prefer a user service instead (no `sudo`)? Put the file in
+`~/.config/systemd/user/mailbot.service` (drop the `User=`/`Group=` lines), run
+`systemctl --user enable --now mailbot`, and `sudo loginctl enable-linger owentaylor` so it
+runs without an active login.
+
 ## Adding a new skill
 
 Specialists are registered in one place: `orchestrator/registry.py`. To add a skill:
