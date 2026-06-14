@@ -11,6 +11,8 @@ dependencies = [
     "google-adk[extensions]>=1.28.1",
     "imap-tools>=1.11.1",
     "python-telegram-bot[job-queue]>=22.7",
+    "requests>=2.31",
+    "vobject>=0.9",
 ]
 [dependency-groups]
 dev = [

@@ -3,14 +3,17 @@
 A personal, single-user **Telegram email & calendar assistant** built on **Google ADK**
 with Gemini models. An orchestrator agent routes your chat messages to specialist agents:
 
-- **EmailAgent** — across Gmail and iCloud (IMAP): reads/summarizes unread mail, searches
-  (sender/subject/date), reads a full message, marks read/unread, stars, moves/archives,
-  deletes to Trash, lists folders, and **drafts** new emails and replies (saved to Drafts —
-  it never sends).
+- **MessagingAgent** — email + contacts. Across Gmail and iCloud (IMAP): reads/summarizes
+  unread mail, searches (sender/subject/date), reads a full message, marks read/unread, stars,
+  moves/archives, deletes to Trash, lists folders, and **drafts** new emails and replies (saved
+  to Drafts — it never sends). Also looks up **iCloud contacts** (CardDAV, read-only) — e.g. to
+  resolve "draft an email to Mom" to an address.
 - **CalendarAgent** — reads and fully manages (create / update / delete) your Apple
   Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
 - **ResearchAgent** — answers knowledge / current-event questions via Google Search.
+- **WriterAgent** — composes polished emails/messages from facts (no tools; runs the capable
+  model so prose quality doesn't suffer from the lighter sub-agent model).
 
 Conversations are organized into **sessions** (persisted in SQLite). Closing a session
 compresses it into long-term memories via the LLM.
@@ -22,11 +25,16 @@ main.py
 └─ TelegramClient (telegram_client.py)      python-telegram-bot, long polling
    └─ AgentService (agent_service.py)        session + memory lifecycle
       └─ ADK Runner
-         └─ Orchestrator (orchestrator/agent.py)
-            ├─ EmailAgent    → IMAP via imap_tools (orchestrator/agents/mail_agent)
-            ├─ MemoryAgent   → ChromaDB vector store (orchestrator/agents/memory_agent)
-            └─ ResearchAgent → Google Search tool (orchestrator/agents/search_agent.py)
+         └─ Orchestrator (orchestrator/agent.py)   calls specialists as tools, aggregates
+            ├─ MessagingAgent → IMAP mail + CardDAV contacts (agents/messaging_agent)
+            ├─ CalendarAgent  → iCloud CalDAV (agents/calendar_agent)
+            ├─ MemoryAgent    → ChromaDB vector store (agents/memory_agent)
+            ├─ ResearchAgent  → Google Search tool (agents/search_agent.py)
+            └─ WriterAgent    → composes prose, no tools (agents/writer_agent.py)
 ```
+
+Specialists are registered in `orchestrator/registry.py` and wrapped as call-and-return
+tools, so the orchestrator can call several in one turn and combine their results.
 
 - **Sessions:** ADK `DatabaseSessionService` → SQLite at `mailbot.db`.
 - **Memory:** `ChromaMemoryService` (persistent Chroma at `memory_db/`).
@@ -123,8 +131,9 @@ registered specialist is wired in with valid tools — run them after changing w
 ## Notes
 
 - `mailbot.db` and `memory_db/` are runtime artifacts and are gitignored.
-- The Gemini model is set once via `MODEL` in `orchestrator/constants.py` (currently
-  `gemini-3.5-flash`) — bump it there when the model rotates.
+- Models are set in `orchestrator/constants.py`: `MODEL` (`gemini-3.5-flash`) runs the
+  orchestrator + session-memory compression; `SUBAGENT_MODEL` (`gemini-3.1-flash-lite`) runs
+  the specialist sub-agents (lighter/faster, since a request fans out to several of them).
 - Calendar changes are written straight to iCloud over CalDAV, so they sync to all your
   Apple devices automatically. Calendar create/update/delete are performed without a
   confirmation prompt; email send/archive still require confirmation.

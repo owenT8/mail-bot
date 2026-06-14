@@ -7,7 +7,7 @@ app-password reuse rules directly.
 
 import pytest
 
-from orchestrator.agents.mail_agent.mail_client import (
+from orchestrator.agents.messaging_agent.mail_client import (
     GMAIL_HOST,
     ICLOUD_HOST,
     MailClient,

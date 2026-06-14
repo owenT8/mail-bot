@@ -13,10 +13,11 @@ from typing import Callable
 from google.adk.agents.llm_agent import Agent
 
 from orchestrator.agents.calendar_agent.calendar_agent import build_calendar_agent
-from orchestrator.agents.mail_agent.mail_agent import build_mail_agent
+from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_agent
 from orchestrator.agents.memory_agent.memory_agent import build_memory_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.agents.search_agent import build_search_agent
+from orchestrator.agents.writer_agent import build_writer_agent
 
 
 @dataclass
@@ -46,9 +47,12 @@ class Specialist:
 
 SPECIALISTS: list[Specialist] = [
     Specialist(
-        name="EmailAgent",
-        when_to_use="Use for all requests regarding emails.",
-        build=lambda ctx: build_mail_agent(),
+        name="MessagingAgent",
+        when_to_use=(
+            "Use for email (reading, searching, organizing, drafting) and for "
+            "looking up the user's contacts (names, email addresses, phone numbers)."
+        ),
+        build=lambda ctx: build_messaging_agent(),
     ),
     Specialist(
         name="ResearchAgent",
@@ -74,6 +78,16 @@ SPECIALISTS: list[Specialist] = [
             'interview?").'
         ),
         build=lambda ctx: build_memory_agent(ctx.memory_service),
+    ),
+    Specialist(
+        name="WriterAgent",
+        when_to_use=(
+            "Use to WRITE or polish the actual text of an email, reply, or message. "
+            "Give it the recipient and Owen's relationship to them, the purpose, and "
+            "the raw facts to include; it returns well-written prose. Always use it to "
+            "compose message text before saving a draft — the other agents write poorly."
+        ),
+        build=lambda ctx: build_writer_agent(),
     ),
 ]
 
