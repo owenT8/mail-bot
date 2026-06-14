@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from google.adk.events.event import Event
@@ -8,6 +9,7 @@ from google.genai import types
 
 from orchestrator.agent import build_root_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
+from orchestrator.agents.messaging_agent.mail_client import MailClient
 
 APP_NAME = "Trail-Guide"
 SESSION_NAME_KEY = "session_name"
@@ -28,6 +30,25 @@ class AgentService:
             memory_service=self.memory_service,
         )
         self._active_sessions: dict[str, str] = {}
+        # Direct mail client for fast, deterministic button actions (the inbox
+        # cards and their Archive/Read/Trash taps) — no LLM in the loop.
+        self.mail_client = MailClient()
+
+    # ------------------------------------------------------------------
+    # Direct mail actions (used by Telegram inline-button handlers)
+    # ------------------------------------------------------------------
+
+    async def fetch_unread(self) -> list[dict]:
+        return await asyncio.to_thread(self.mail_client.getUnreadEmails)
+
+    async def archive_email(self, uid: str, account: str) -> str:
+        return await asyncio.to_thread(self.mail_client.archiveEmail, uid, account)
+
+    async def mark_email_read(self, uid: str, account: str) -> str:
+        return await asyncio.to_thread(self.mail_client.markRead, uid, account, True)
+
+    async def trash_email(self, uid: str, account: str) -> str:
+        return await asyncio.to_thread(self.mail_client.deleteEmail, uid, account)
 
     async def _get_or_create_active_session(self, user_id: str) -> str:
         session_id = self._active_sessions.get(user_id)

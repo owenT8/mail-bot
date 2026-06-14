@@ -7,8 +7,10 @@ from orchestrator.agents.messaging_agent.mail_client import MailClient
 def test_special_folders_per_account():
     assert MailClient._special_folder("gmail", "trash") == "[Gmail]/Trash"
     assert MailClient._special_folder("gmail", "drafts") == "[Gmail]/Drafts"
+    assert MailClient._special_folder("gmail", "archive") == "[Gmail]/All Mail"
     assert MailClient._special_folder("icloud", "trash") == "Trash"
     assert MailClient._special_folder("icloud", "drafts") == "Drafts"
+    assert MailClient._special_folder("icloud", "archive") == "Archive"
     # Unknown account falls back to a capitalized folder name.
     assert MailClient._special_folder("yahoo", "trash") == "Trash"
 

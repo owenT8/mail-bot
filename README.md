@@ -97,12 +97,19 @@ Then message your bot on Telegram. `/start` prints the available commands:
 
 | Command | Description |
 | --- | --- |
-| `/fetchemails` | Fetch and triage your latest unread emails now |
+| `/inbox` | Unread emails as cards with tap-to-act **Archive / Read / Trash** buttons |
+| `/fetchemails` | A triaged (LLM) summary of your latest unread emails |
+| `/digest` | View/set the morning digest — `/digest 07:30`, `/digest off` |
+| `/sessions` | List sessions as **tappable buttons** (tap to resume) |
 | `/newsession [name]` | Start a fresh conversation (closes the current one) |
 | `/closesession` | Close the active session and commit it to memory |
-| `/opensession <n\|name>` | List recent sessions, or resume one by index/name |
+| `/opensession <n\|name>` | Resume a session by index/name |
 | `/rename <name>` | Rename the active session |
-| `/sessions` | List your recent sessions |
+
+Commands also appear in Telegram's "/" menu. A **morning digest** (triaged email + today's
+calendar) is pushed daily at 08:00 (your `TIMEZONE`) by default — change it with `/digest`.
+Preferences persist across restarts in `telegram_state.pkl` (gitignored). Inbox button taps
+act directly on the mailbox (no LLM), so they're instant.
 
 ## Adding a new skill
 
