@@ -17,6 +17,7 @@ from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_
 from orchestrator.agents.memory_agent.memory_agent import build_memory_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.agents.search_agent import build_search_agent
+from orchestrator.agents.writer_agent import build_writer_agent
 
 
 @dataclass
@@ -77,6 +78,16 @@ SPECIALISTS: list[Specialist] = [
             'interview?").'
         ),
         build=lambda ctx: build_memory_agent(ctx.memory_service),
+    ),
+    Specialist(
+        name="WriterAgent",
+        when_to_use=(
+            "Use to WRITE or polish the actual text of an email, reply, or message. "
+            "Give it the recipient and Owen's relationship to them, the purpose, and "
+            "the raw facts to include; it returns well-written prose. Always use it to "
+            "compose message text before saving a draft — the other agents write poorly."
+        ),
+        build=lambda ctx: build_writer_agent(),
     ),
 ]
 

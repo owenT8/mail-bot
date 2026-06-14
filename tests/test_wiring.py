@@ -75,9 +75,10 @@ def test_specialist_names_unique():
 
 
 def test_model_split(root_agent):
-    # Orchestrator stays on the capable model; specialists run the lighter one.
+    # Orchestrator + the WriterAgent stay on the capable model (routing/synthesis
+    # and prose quality); the "doer" specialists run the lighter, faster model.
     assert root_agent.model == MODEL
-    for tool in root_agent.tools:
-        agent = getattr(tool, "agent", None)
-        if agent is not None:
-            assert agent.model == SUBAGENT_MODEL, f"{tool.name} not on SUBAGENT_MODEL"
+    by_name = {t.name: t.agent for t in root_agent.tools if getattr(t, "agent", None)}
+    assert by_name["WriterAgent"].model == MODEL
+    for name in ("MessagingAgent", "CalendarAgent", "MemoryAgent", "ResearchAgent"):
+        assert by_name[name].model == SUBAGENT_MODEL, f"{name} not on SUBAGENT_MODEL"

@@ -12,6 +12,8 @@ with Gemini models. An orchestrator agent routes your chat messages to specialis
   Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
 - **ResearchAgent** — answers knowledge / current-event questions via Google Search.
+- **WriterAgent** — composes polished emails/messages from facts (no tools; runs the capable
+  model so prose quality doesn't suffer from the lighter sub-agent model).
 
 Conversations are organized into **sessions** (persisted in SQLite). Closing a session
 compresses it into long-term memories via the LLM.
@@ -27,7 +29,8 @@ main.py
             ├─ MessagingAgent → IMAP mail + CardDAV contacts (agents/messaging_agent)
             ├─ CalendarAgent  → iCloud CalDAV (agents/calendar_agent)
             ├─ MemoryAgent    → ChromaDB vector store (agents/memory_agent)
-            └─ ResearchAgent  → Google Search tool (agents/search_agent.py)
+            ├─ ResearchAgent  → Google Search tool (agents/search_agent.py)
+            └─ WriterAgent    → composes prose, no tools (agents/writer_agent.py)
 ```
 
 Specialists are registered in `orchestrator/registry.py` and wrapped as call-and-return
