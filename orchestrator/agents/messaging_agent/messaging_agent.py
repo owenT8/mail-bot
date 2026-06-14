@@ -2,9 +2,10 @@ import asyncio
 
 from google.adk.agents.llm_agent import Agent
 
-from orchestrator.constants import MESSAGING_AGENT_PROMPT, SUBAGENT_MODEL
+from orchestrator.constants import MESSAGING_AGENT_PROMPT, MODEL, SUBAGENT_MODEL
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 from orchestrator.agents.messaging_agent.contacts_client import ContactsClient
+from orchestrator.agents.messaging_agent.attachments import read_attachment_text
 from orchestrator.time_context import datetime_global_instruction
 
 
@@ -63,8 +64,33 @@ def build_messaging_agent() -> Agent:
         Args:
             email_uid: The uid of the email.
             account: Which mailbox it's in ("gmail" or "icloud").
+
+        The returned dict includes an "attachments" list (filename, content_type,
+        size); use read_attachment to read a PDF/text attachment's contents.
         """
         return await asyncio.to_thread(client.getEmail, email_uid, account)
+
+    async def read_attachment(email_uid: str, account: str, filename: str) -> str:
+        """Read the text content of an email attachment (PDF or text file).
+
+        Args:
+            email_uid: The uid of the email holding the attachment.
+            account: Which mailbox it's in ("gmail" or "icloud").
+            filename: The attachment's filename (from the email's "attachments").
+
+        PDFs are read via their text layer, falling back to vision for scanned
+        PDFs. Returns the extracted text, or a note if the type isn't readable.
+        """
+        att = await asyncio.to_thread(
+            client.fetchAttachment, email_uid, account, filename
+        )
+        return await asyncio.to_thread(
+            read_attachment_text,
+            att["content_type"],
+            att["filename"],
+            att["payload"],
+            MODEL,
+        )
 
     async def list_folders(account: str = "") -> list[dict]:
         """List folder names per mailbox. account "" lists all; or "gmail"/"icloud"."""
@@ -168,6 +194,7 @@ def build_messaging_agent() -> Agent:
             get_unread_emails,
             search_emails,
             get_email,
+            read_attachment,
             list_folders,
             move_email_to_folder,
             delete_email,
