@@ -3,10 +3,11 @@
 A personal, single-user **Telegram email & calendar assistant** built on **Google ADK**
 with Gemini models. An orchestrator agent routes your chat messages to specialist agents:
 
-- **EmailAgent** — across Gmail and iCloud (IMAP): reads/summarizes unread mail, searches
-  (sender/subject/date), reads a full message, marks read/unread, stars, moves/archives,
-  deletes to Trash, lists folders, and **drafts** new emails and replies (saved to Drafts —
-  it never sends).
+- **MessagingAgent** — email + contacts. Across Gmail and iCloud (IMAP): reads/summarizes
+  unread mail, searches (sender/subject/date), reads a full message, marks read/unread, stars,
+  moves/archives, deletes to Trash, lists folders, and **drafts** new emails and replies (saved
+  to Drafts — it never sends). Also looks up **iCloud contacts** (CardDAV, read-only) — e.g. to
+  resolve "draft an email to Mom" to an address.
 - **CalendarAgent** — reads and fully manages (create / update / delete) your Apple
   Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
@@ -22,11 +23,15 @@ main.py
 └─ TelegramClient (telegram_client.py)      python-telegram-bot, long polling
    └─ AgentService (agent_service.py)        session + memory lifecycle
       └─ ADK Runner
-         └─ Orchestrator (orchestrator/agent.py)
-            ├─ EmailAgent    → IMAP via imap_tools (orchestrator/agents/mail_agent)
-            ├─ MemoryAgent   → ChromaDB vector store (orchestrator/agents/memory_agent)
-            └─ ResearchAgent → Google Search tool (orchestrator/agents/search_agent.py)
+         └─ Orchestrator (orchestrator/agent.py)   calls specialists as tools, aggregates
+            ├─ MessagingAgent → IMAP mail + CardDAV contacts (agents/messaging_agent)
+            ├─ CalendarAgent  → iCloud CalDAV (agents/calendar_agent)
+            ├─ MemoryAgent    → ChromaDB vector store (agents/memory_agent)
+            └─ ResearchAgent  → Google Search tool (agents/search_agent.py)
 ```
+
+Specialists are registered in `orchestrator/registry.py` and wrapped as call-and-return
+tools, so the orchestrator can call several in one turn and combine their results.
 
 - **Sessions:** ADK `DatabaseSessionService` → SQLite at `mailbot.db`.
 - **Memory:** `ChromaMemoryService` (persistent Chroma at `memory_db/`).

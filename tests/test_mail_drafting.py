@@ -1,7 +1,7 @@
 """Tests for the pure mail helpers — draft MIME building, reply subjects, and
 per-account special folders. No network."""
 
-from orchestrator.agents.mail_agent.mail_client import MailClient
+from orchestrator.agents.messaging_agent.mail_client import MailClient
 
 
 def test_special_folders_per_account():

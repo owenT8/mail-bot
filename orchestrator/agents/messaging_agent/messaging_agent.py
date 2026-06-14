@@ -2,13 +2,17 @@ import asyncio
 
 from google.adk.agents.llm_agent import Agent
 
-from orchestrator.constants import EMAIL_AGENT_PROMPT, MODEL
-from orchestrator.agents.mail_agent.mail_client import MailClient
+from orchestrator.constants import MESSAGING_AGENT_PROMPT, MODEL
+from orchestrator.agents.messaging_agent.mail_client import MailClient
+from orchestrator.agents.messaging_agent.contacts_client import ContactsClient
 from orchestrator.time_context import datetime_global_instruction
 
 
-def build_mail_agent() -> Agent:
+def build_messaging_agent() -> Agent:
     client = MailClient()
+    contacts = ContactsClient()
+
+    # ---- Email ----
 
     async def get_unread_emails() -> list[dict]:
         """Fetch unread emails from ALL the user's mailboxes (Gmail and iCloud).
@@ -139,11 +143,26 @@ def build_mail_agent() -> Agent:
         """
         return await asyncio.to_thread(client.draftReply, email_uid, account, body)
 
+    # ---- Contacts (iCloud, read-only) ----
+
+    async def search_contacts(query: str) -> list[dict]:
+        """Search the user's iCloud contacts by name, email, org, or phone.
+
+        Use this to look someone up — e.g. to find an email address before
+        drafting a message. Returns matching contacts, each a dict with: name,
+        emails (list), phones (list), org.
+        """
+        return await asyncio.to_thread(contacts.search_contacts, query)
+
+    async def list_contacts(limit: int = 100) -> list[dict]:
+        """List the user's iCloud contacts (name + emails/phones), up to limit."""
+        return await asyncio.to_thread(contacts.list_contacts, limit)
+
     return Agent(
         model=MODEL,
-        name="EmailAgent",
-        description="Reads, searches, organizes, and drafts (never sends) my emails.",
-        instruction=EMAIL_AGENT_PROMPT,
+        name="MessagingAgent",
+        description="Reads/searches/organizes/drafts (never sends) my email, and looks up my contacts.",
+        instruction=MESSAGING_AGENT_PROMPT,
         global_instruction=datetime_global_instruction,
         tools=[
             get_unread_emails,
@@ -156,5 +175,7 @@ def build_mail_agent() -> Agent:
             flag_email,
             draft_email,
             draft_reply,
+            search_contacts,
+            list_contacts,
         ],
     )
