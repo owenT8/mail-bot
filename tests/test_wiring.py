@@ -79,6 +79,8 @@ def test_model_split(root_agent):
     # and prose quality); the "doer" specialists run the lighter, faster model.
     assert root_agent.model == MODEL
     by_name = {t.name: t.agent for t in root_agent.tools if getattr(t, "agent", None)}
+    # Composition/reasoning agents need the capable model.
     assert by_name["WriterAgent"].model == MODEL
+    assert by_name["NoteTakerAgent"].model == MODEL
     for name in ("MessagingAgent", "CalendarAgent", "MemoryAgent", "ResearchAgent"):
         assert by_name[name].model == SUBAGENT_MODEL, f"{name} not on SUBAGENT_MODEL"
