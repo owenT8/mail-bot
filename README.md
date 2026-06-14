@@ -3,8 +3,10 @@
 A personal, single-user **Telegram email & calendar assistant** built on **Google ADK**
 with Gemini models. An orchestrator agent routes your chat messages to specialist agents:
 
-- **EmailAgent** — reads/summarizes unread mail across Gmail and iCloud (IMAP) and can
-  archive/move messages.
+- **EmailAgent** — across Gmail and iCloud (IMAP): reads/summarizes unread mail, searches
+  (sender/subject/date), reads a full message, marks read/unread, stars, moves/archives,
+  deletes to Trash, lists folders, and **drafts** new emails and replies (saved to Drafts —
+  it never sends).
 - **CalendarAgent** — reads and fully manages (create / update / delete) your Apple
   Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
