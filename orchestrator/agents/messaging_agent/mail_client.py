@@ -20,8 +20,8 @@ ICLOUD_HOST = "imap.mail.me.com"
 
 # Per-account special folders (display names differ between providers).
 ACCOUNT_FOLDERS = {
-    "gmail": {"trash": "[Gmail]/Trash", "drafts": "[Gmail]/Drafts"},
-    "icloud": {"trash": "Trash", "drafts": "Drafts"},
+    "gmail": {"trash": "[Gmail]/Trash", "drafts": "[Gmail]/Drafts", "archive": "[Gmail]/All Mail"},
+    "icloud": {"trash": "Trash", "drafts": "Drafts", "archive": "Archive"},
 }
 
 
@@ -228,6 +228,14 @@ class MailClient:
         with self._mailbox(target) as mailbox:
             mailbox.move(email_uid, trash)
         return f"Moved email {email_uid} to Trash in {account}."
+
+    def archiveEmail(self, email_uid: str, account: str) -> str:
+        """Move an email to the account's archive folder."""
+        target = self._account(account)
+        archive = self._special_folder(target.label, "archive")
+        with self._mailbox(target) as mailbox:
+            mailbox.move(email_uid, archive)
+        return f"Archived email {email_uid} in {account}."
 
     def markRead(self, email_uid: str, account: str, read: bool = True) -> str:
         """Mark an email read (read=True) or unread (read=False)."""

@@ -3,4 +3,5 @@
 .adk
 mailbot.db
 memory_db/
+telegram_state.pkl
 __pycache__
