@@ -4,6 +4,7 @@ from google.adk.agents.llm_agent import Agent
 
 from orchestrator.constants import EMAIL_AGENT_PROMPT, MODEL
 from orchestrator.agents.mail_agent.mail_client import MailClient
+from orchestrator.time_context import datetime_global_instruction
 
 
 def build_mail_agent() -> Agent:
@@ -31,5 +32,6 @@ def build_mail_agent() -> Agent:
         name="EmailAgent",
         description="Reads, summarizes, and files my emails.",
         instruction=EMAIL_AGENT_PROMPT,
+        global_instruction=datetime_global_instruction,
         tools=[get_unread_emails, move_email_to_folder],
     )

@@ -10,11 +10,13 @@ there's no separate wiring to keep in sync.
 from dataclasses import dataclass
 from typing import Callable
 
+from google.adk.agents.llm_agent import Agent
+
 from orchestrator.agents.calendar_agent.calendar_agent import build_calendar_agent
 from orchestrator.agents.mail_agent.mail_agent import build_mail_agent
 from orchestrator.agents.memory_agent.memory_agent import build_memory_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
-from orchestrator.agents.search_agent import search_agent
+from orchestrator.agents.search_agent import build_search_agent
 
 
 @dataclass
@@ -26,18 +28,20 @@ class AgentContext:
 
 @dataclass(frozen=True)
 class Specialist:
-    """Declarative description of one specialist the orchestrator can use.
+    """Declarative description of one specialist the orchestrator can call.
 
-    name:        must match the name of the built Agent/tool.
+    Every specialist is exposed to the orchestrator as an AgentTool (call and
+    return), so the orchestrator can call several in one turn and synthesize a
+    combined reply.
+
+    name:        must match the built Agent's name (becomes the tool name).
     when_to_use: one-liner rendered into the orchestrator's <team> section.
-    build:       returns an ADK Agent (kind="sub_agent") or a tool (kind="tool").
-    kind:        "sub_agent" (delegated to) or "tool" (called directly).
+    build:       returns the specialist's ADK Agent.
     """
 
     name: str
     when_to_use: str
-    build: Callable[[AgentContext], object]
-    kind: str = "sub_agent"
+    build: Callable[[AgentContext], Agent]
 
 
 SPECIALISTS: list[Specialist] = [
@@ -49,8 +53,7 @@ SPECIALISTS: list[Specialist] = [
     Specialist(
         name="ResearchAgent",
         when_to_use="Use for all knowledge or current event queries.",
-        build=lambda ctx: search_agent,
-        kind="tool",
+        build=lambda ctx: build_search_agent(),
     ),
     Specialist(
         name="CalendarAgent",
