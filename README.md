@@ -119,25 +119,39 @@ act directly on the mailbox (no LLM), so they're instant.
 
 ## Run as a service (systemd)
 
-A unit file is provided at [`deploy/mailbot.service`](deploy/mailbot.service) (runs as the
-`owentaylor` user via the venv built by `uv sync`). Install it as a system service:
+### Recommended: a user service
+
+The app lives in your home directory, and on **SELinux-enforcing** systems (Fedora/RHEL) a
+*system* service can't execute a binary under `/home` (you'll get `203/EXEC … Permission
+denied` because `.venv/bin/python` is labeled `data_home_t`). A **user service** runs in your
+own context and avoids this entirely — use [`deploy/mailbot.user.service`](deploy/mailbot.user.service):
 
 ```bash
-uv sync                                   # build/refresh .venv first
-sudo cp deploy/mailbot.service /etc/systemd/system/mailbot.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now mailbot       # start now + on every boot
-systemctl status mailbot                  # check it's running
-journalctl -u mailbot -f                  # follow logs
+uv sync                                            # build/refresh .venv first
+mkdir -p ~/.config/systemd/user
+cp deploy/mailbot.user.service ~/.config/systemd/user/mailbot.service
+systemctl --user daemon-reload
+systemctl --user enable --now mailbot
+sudo loginctl enable-linger "$USER"                # run without an active login + at boot
+systemctl --user status mailbot
+journalctl --user -u mailbot -f                    # follow logs
 ```
 
-After pulling code changes: `uv sync && sudo systemctl restart mailbot`.
+After pulling code changes: `uv sync && systemctl --user restart mailbot`.
 
-If your paths/username differ, edit `User`, `WorkingDirectory`, and `ExecStart` in the unit.
-Prefer a user service instead (no `sudo`)? Put the file in
-`~/.config/systemd/user/mailbot.service` (drop the `User=`/`Group=` lines), run
-`systemctl --user enable --now mailbot`, and `sudo loginctl enable-linger owentaylor` so it
-runs without an active login.
+### Alternative: a system service
+
+[`deploy/mailbot.service`](deploy/mailbot.service) runs as the `owentaylor` user system-wide
+(`sudo cp` to `/etc/systemd/system/`, `systemctl enable --now mailbot`). **On SELinux-enforcing
+systems this fails** unless you either relocate the app outside `/home` (e.g. `/opt/mailbot`)
+or relabel the venv so a service may exec it:
+
+```bash
+sudo semanage fcontext -a -t bin_t "/home/owentaylor/projects/mail-bot/.venv/bin(/.*)?"
+sudo restorecon -Rv /home/owentaylor/projects/mail-bot/.venv/bin
+```
+
+The user service above sidesteps all of this, so prefer it for a personal install.
 
 ## Adding a new skill
 
