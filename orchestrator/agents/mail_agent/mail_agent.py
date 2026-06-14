@@ -11,21 +11,29 @@ def build_mail_agent() -> Agent:
     client = MailClient()
 
     async def get_unread_emails() -> list[dict]:
-        """Fetch the user's current unread emails.
+        """Fetch the user's current unread emails from ALL their mailboxes
+        (Gmail and iCloud).
 
-        Returns a list of emails, each a dict with keys: uid, sender,
-        subject, body.
+        Returns a list of emails, each a dict with keys: uid, account (which
+        mailbox the email is in — "gmail" or "icloud"), sender, subject, body.
         """
         return await asyncio.to_thread(client.getUnreadEmails)
 
-    async def move_email_to_folder(email_uid: str, folder: str) -> str:
+    async def move_email_to_folder(
+        email_uid: str, folder: str, account: str
+    ) -> str:
         """Move an email to a folder (for example, to archive it).
 
         Args:
             email_uid: The uid of the email, taken from get_unread_emails.
-            folder: Destination folder, e.g. "[Gmail]/All Mail" to archive.
+            folder: Destination folder. Gmail uses e.g. "[Gmail]/All Mail";
+                iCloud uses e.g. "Archive".
+            account: Which mailbox the email is in ("gmail" or "icloud") —
+                use the email's "account" field.
         """
-        return await asyncio.to_thread(client.moveToFolder, email_uid, folder)
+        return await asyncio.to_thread(
+            client.moveToFolder, email_uid, folder, account
+        )
 
     return Agent(
         model=MODEL,

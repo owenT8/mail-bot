@@ -3,7 +3,8 @@
 A personal, single-user **Telegram email & calendar assistant** built on **Google ADK**
 with Gemini models. An orchestrator agent routes your chat messages to specialist agents:
 
-- **EmailAgent** — reads/summarizes unread Gmail (IMAP) and can archive/move messages.
+- **EmailAgent** — reads/summarizes unread mail across Gmail and iCloud (IMAP) and can
+  archive/move messages.
 - **CalendarAgent** — reads and fully manages (create / update / delete) your Apple
   Calendar over iCloud CalDAV.
 - **MemoryAgent** — durable per-user memory backed by ChromaDB (save / recall / forget / list).
@@ -47,9 +48,16 @@ GOOGLE_USER=you@gmail.com
 GOOGLE_PASSWORD=...        # a Gmail *app password* (not your account password)
 GOOGLE_API_KEY=...         # Gemini API key used by ADK + session compression
 
+# iCloud Mail (optional). Reading covers Gmail + iCloud together. By default the
+# iCloud mailbox reuses the calendar's Apple ID + app-specific password below.
+# ICLOUD_USER=you@icloud.com     # only needed if your iCloud Mail address differs
+                                 # from CALDAV_USERNAME (your Apple ID)
+# ICLOUD_PASSWORD=...            # only needed to override CALDAV_PASSWORD
+
 # Calendar (Apple iCloud over CalDAV)
 CALDAV_USERNAME=you@icloud.com   # your Apple ID
-CALDAV_PASSWORD=...              # an Apple *app-specific password* (see below)
+CALDAV_PASSWORD=...              # an Apple *app-specific password* (see below);
+                                 # also used for iCloud Mail above
 # CALDAV_URL=https://caldav.icloud.com   # optional, this is the default
 # CALDAV_CALENDAR=Home                   # optional default calendar for NEW events;
                                          # reads always span all calendars and the
