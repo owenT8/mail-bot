@@ -120,6 +120,11 @@ class MailClient:
             "date": message.date.isoformat() if message.date else "",
             "message_id": message_id,
             "body": body,
+            "attachments": [
+                {"filename": a.filename, "content_type": a.content_type, "size": a.size}
+                for a in message.attachments
+                if a.filename
+            ],
         }
 
     def _fetch(self, account: ImapAccount, criteria, limit: int | None) -> list[dict]:
@@ -193,6 +198,26 @@ class MailClient:
                 AND(uid=email_uid), mark_seen=False, limit=1
             ):
                 return self._to_dict(message, target.label, full_body=True)
+        raise RuntimeError(f"No email with uid {email_uid} in {account}.")
+
+    def fetchAttachment(self, email_uid: str, account: str, filename: str) -> dict:
+        """Fetch one attachment's bytes by email uid + filename."""
+        target = self._account(account)
+        with self._mailbox(target) as mailbox:
+            for message in mailbox.fetch(
+                AND(uid=email_uid), mark_seen=False, limit=1
+            ):
+                for att in message.attachments:
+                    if att.filename == filename:
+                        return {
+                            "filename": att.filename,
+                            "content_type": att.content_type,
+                            "payload": att.payload,
+                        }
+                available = [a.filename for a in message.attachments if a.filename]
+                raise RuntimeError(
+                    f"No attachment {filename!r} on that email. Available: {available}"
+                )
         raise RuntimeError(f"No email with uid {email_uid} in {account}.")
 
     def listFolders(self, account: str | None = None) -> list[dict]:

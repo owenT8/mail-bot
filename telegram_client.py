@@ -173,7 +173,12 @@ class TelegramClient:
         sender = html.escape(email.get("sender") or "")
         account = html.escape(email.get("account") or "")
         snippet = html.escape(" ".join((email.get("body") or "").split())[:140])
-        return f"<b>{subject}</b>\n{sender} · <i>{account}</i>\n{snippet}"
+        attachments = email.get("attachments") or []
+        att_line = ""
+        if attachments:
+            names = ", ".join(html.escape(a.get("filename") or "") for a in attachments[:3])
+            att_line = f"\n📎 {names}"
+        return f"<b>{subject}</b>\n{sender} · <i>{account}</i>\n{snippet}{att_line}"
 
     @staticmethod
     def _card_markup(account: str, uid: str, confirm_trash: bool = False) -> InlineKeyboardMarkup:
