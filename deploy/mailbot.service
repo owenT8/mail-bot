@@ -1,0 +1,27 @@
+[Unit]
+Description=mail-bot (Trail Guide) Telegram assistant
+After=network-online.target
+Wants=network-online.target
+# If it crash-loops, back off instead of hammering Telegram/iCloud.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=owentaylor
+Group=owentaylor
+WorkingDirectory=/home/owentaylor/projects/mail-bot
+# Runs the interpreter from the uv-built venv directly (no PATH lookup needed).
+# Build/update it with `uv sync` before (re)starting after pulling changes.
+ExecStart=/home/owentaylor/projects/mail-bot/.venv/bin/python main.py
+# The app reads its .env from WorkingDirectory (python-dotenv), so no
+# EnvironmentFile is needed.
+Restart=always
+RestartSec=5
+# Light hardening (kept loose so it can write mailbot.db, memory_db/,
+# telegram_state.pkl, and ~/my-stuff/Notes).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
