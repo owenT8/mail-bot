@@ -14,8 +14,9 @@ with Gemini models. An orchestrator agent routes your chat messages to specialis
 - **ResearchAgent** — answers knowledge / current-event questions via Google Search.
 - **WriterAgent** — composes polished emails/messages from facts (no tools; runs the capable
   model so prose quality doesn't suffer from the lighter sub-agent model).
-- **NoteTakerAgent** — reads/writes/updates your personal Markdown notes in `~/my-stuff/Notes`
-  (runs the capable model).
+- **NoteTakerAgent** — reads/writes/updates your personal Markdown notes in `~/my-stuff/Notes`,
+  including notes nested in **subfolders** of any depth (read / write / append / search
+  recursively; runs the capable model).
 
 Conversations are organized into **sessions** (persisted in SQLite). Closing a session
 compresses it into long-term memories via the LLM.
