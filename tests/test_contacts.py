@@ -37,3 +37,21 @@ def test_parse_vcard_empty_returns_none():
 
 def test_parse_vcard_garbage_returns_none():
     assert ContactsClient._parse_vcard("not a vcard") is None
+
+
+def test_contacts_are_cached(monkeypatch):
+    # Two lookups should hit the network (fetch vCards) only once.
+    client = ContactsClient()
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        return [SAMPLE]
+
+    monkeypatch.setattr(client, "_fetch_vcards", fake_fetch)
+
+    first = client.search_contacts("sarah")
+    second = client.search_contacts("sarah")
+
+    assert calls["n"] == 1, "address book should be fetched once and cached"
+    assert first and second and first[0]["name"] == "Sarah Taylor"

@@ -12,6 +12,8 @@ points at the exact request that broke.
 
 import logging
 import os
+import threading
+import time
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 
@@ -25,6 +27,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 ICLOUD_CONTACTS_URL = "https://contacts.icloud.com"
+CONTACTS_TTL_SECONDS = 600  # cache the address book for 10 minutes
 DAV = "DAV:"
 CARD = "urn:ietf:params:xml:ns:carddav"
 NS = {"d": DAV, "card": CARD}
@@ -54,6 +57,12 @@ class ContactsClient:
         self.username = os.getenv("CARDDAV_USERNAME") or os.getenv("CALDAV_USERNAME")
         self.password = os.getenv("CARDDAV_PASSWORD") or os.getenv("CALDAV_PASSWORD")
         self.base_url = os.getenv("CARDDAV_URL", ICLOUD_CONTACTS_URL)
+        # Caches (the client lives for the whole process). The lock serializes
+        # concurrent lookups so two parallel tool calls share one fetch.
+        self._lock = threading.Lock()
+        self._addressbook_url: str | None = None
+        self._contacts_cache: list[dict] | None = None
+        self._cache_time = 0.0
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -77,7 +86,7 @@ class ContactsClient:
                 "Depth": depth,
                 "Content-Type": "application/xml; charset=utf-8",
             },
-            timeout=60,
+            timeout=30,
         )
         response.raise_for_status()
         return response
@@ -96,6 +105,8 @@ class ContactsClient:
         raise RuntimeError(f"CardDAV discovery: no <{tag}> href in response.")
 
     def _discover_addressbook(self) -> str:
+        if self._addressbook_url:
+            return self._addressbook_url
         logger.info("CardDAV: discovering principal at %s", self.base_url)
         r = self._dav("PROPFIND", self.base_url, _PROP_PRINCIPAL, depth="0")
         principal_url = urljoin(
@@ -113,6 +124,7 @@ class ContactsClient:
         ab_href = self._first_addressbook_href(r.text)
         ab_url = urljoin(r.url, ab_href)
         logger.info("CardDAV: using addressbook %s", ab_url)
+        self._addressbook_url = ab_url
         return ab_url
 
     def _first_addressbook_href(self, xml_text: str) -> str:
@@ -160,8 +172,19 @@ class ContactsClient:
         return {"name": name, "emails": emails, "phones": phones, "org": org}
 
     def _all_contacts(self) -> list[dict]:
-        contacts = [self._parse_vcard(v) for v in self._fetch_vcards()]
-        return [c for c in contacts if c]
+        # Serialize + cache: the first lookup fetches the address book, the rest
+        # (incl. a concurrent second tool call) reuse it until the TTL expires.
+        with self._lock:
+            fresh = (
+                self._contacts_cache is not None
+                and (time.monotonic() - self._cache_time) < CONTACTS_TTL_SECONDS
+            )
+            if fresh:
+                return self._contacts_cache
+            contacts = [self._parse_vcard(v) for v in self._fetch_vcards()]
+            self._contacts_cache = [c for c in contacts if c]
+            self._cache_time = time.monotonic()
+            return self._contacts_cache
 
     # ------------------------------------------------------------------
     # Public API
