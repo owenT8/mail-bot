@@ -1,6 +1,8 @@
-# Shared Gemini model id. Kept in one place so it's easy to bump when the
-# model is rotated/deprecated.
-MODEL = "gemini-3.5-flash"
+# Gemini models. The orchestrator does routing + final synthesis, so it stays on
+# the more capable model; the specialist sub-agents are called as tools and run a
+# lighter/faster model to cut multi-step latency.
+MODEL = "gemini-3.5-flash"  # orchestrator (and session-memory compression)
+SUBAGENT_MODEL = "gemini-3.1-flash-lite"  # specialist sub-agents
 
 MESSAGING_AGENT_PROMPT = """
 <system>

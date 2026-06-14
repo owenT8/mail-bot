@@ -128,8 +128,9 @@ registered specialist is wired in with valid tools — run them after changing w
 ## Notes
 
 - `mailbot.db` and `memory_db/` are runtime artifacts and are gitignored.
-- The Gemini model is set once via `MODEL` in `orchestrator/constants.py` (currently
-  `gemini-3.5-flash`) — bump it there when the model rotates.
+- Models are set in `orchestrator/constants.py`: `MODEL` (`gemini-3.5-flash`) runs the
+  orchestrator + session-memory compression; `SUBAGENT_MODEL` (`gemini-3.1-flash-lite`) runs
+  the specialist sub-agents (lighter/faster, since a request fans out to several of them).
 - Calendar changes are written straight to iCloud over CalDAV, so they sync to all your
   Apple devices automatically. Calendar create/update/delete are performed without a
   confirmation prompt; email send/archive still require confirmation.

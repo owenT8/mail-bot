@@ -13,6 +13,7 @@ import pytest
 
 from orchestrator.agent import build_root_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
+from orchestrator.constants import MODEL, SUBAGENT_MODEL
 from orchestrator.registry import SPECIALISTS, render_team
 
 
@@ -71,3 +72,12 @@ def test_specialist_tools_have_names(root_agent):
 def test_specialist_names_unique():
     names = [s.name for s in SPECIALISTS]
     assert len(names) == len(set(names)), "duplicate specialist names"
+
+
+def test_model_split(root_agent):
+    # Orchestrator stays on the capable model; specialists run the lighter one.
+    assert root_agent.model == MODEL
+    for tool in root_agent.tools:
+        agent = getattr(tool, "agent", None)
+        if agent is not None:
+            assert agent.model == SUBAGENT_MODEL, f"{tool.name} not on SUBAGENT_MODEL"

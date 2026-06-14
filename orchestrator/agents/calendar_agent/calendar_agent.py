@@ -2,7 +2,7 @@ import asyncio
 
 from google.adk.agents.llm_agent import Agent
 
-from orchestrator.constants import CALENDAR_AGENT_PROMPT, MODEL
+from orchestrator.constants import CALENDAR_AGENT_PROMPT, SUBAGENT_MODEL
 from orchestrator.agents.calendar_agent.calendar_client import CalendarClient
 from orchestrator.time_context import datetime_global_instruction
 
@@ -102,7 +102,7 @@ def build_calendar_agent() -> Agent:
         return await asyncio.to_thread(client.delete_event, uid)
 
     return Agent(
-        model=MODEL,
+        model=SUBAGENT_MODEL,
         name="CalendarAgent",
         description="Reads and manages my calendar events.",
         instruction=CALENDAR_AGENT_PROMPT,

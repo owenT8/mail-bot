@@ -1,13 +1,13 @@
 from google.adk.agents.llm_agent import Agent
 
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
-from orchestrator.constants import MEMORY_AGENT_PROMPT, MODEL
+from orchestrator.constants import MEMORY_AGENT_PROMPT, SUBAGENT_MODEL
 from orchestrator.time_context import datetime_global_instruction
 
 
 def build_memory_agent(memory_service: ChromaMemoryService) -> Agent:
     return Agent(
-        model=MODEL,
+        model=SUBAGENT_MODEL,
         name="MemoryAgent",
         description="Manages memory and context for the user.",
         instruction=MEMORY_AGENT_PROMPT,
