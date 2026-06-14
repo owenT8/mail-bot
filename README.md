@@ -14,6 +14,8 @@ with Gemini models. An orchestrator agent routes your chat messages to specialis
 - **ResearchAgent** — answers knowledge / current-event questions via Google Search.
 - **WriterAgent** — composes polished emails/messages from facts (no tools; runs the capable
   model so prose quality doesn't suffer from the lighter sub-agent model).
+- **NoteTakerAgent** — reads/writes/updates your personal Markdown notes in `~/my-stuff/Notes`
+  (runs the capable model).
 
 Conversations are organized into **sessions** (persisted in SQLite). Closing a session
 compresses it into long-term memories via the LLM.
@@ -30,7 +32,8 @@ main.py
             ├─ CalendarAgent  → iCloud CalDAV (agents/calendar_agent)
             ├─ MemoryAgent    → ChromaDB vector store (agents/memory_agent)
             ├─ ResearchAgent  → Google Search tool (agents/search_agent.py)
-            └─ WriterAgent    → composes prose, no tools (agents/writer_agent.py)
+            ├─ WriterAgent    → composes prose, no tools (agents/writer_agent.py)
+            └─ NoteTakerAgent → personal notes files (agents/notetaker_agent)
 ```
 
 Specialists are registered in `orchestrator/registry.py` and wrapped as call-and-return
@@ -76,6 +79,9 @@ CALDAV_PASSWORD=...              # an Apple *app-specific password* (see below);
 # Your timezone (IANA name). Drives how naive times like "3pm" are interpreted
 # and the current date/time injected into the agents.
 TIMEZONE=America/Denver
+
+# Where the NoteTaker reads/writes notes (Markdown files). Default shown.
+# NOTES_DIR=~/my-stuff/Notes
 ```
 
 > The Gemini credentials are consumed by Google ADK and the genai SDK. If you use

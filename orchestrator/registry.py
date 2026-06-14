@@ -16,6 +16,7 @@ from orchestrator.agents.calendar_agent.calendar_agent import build_calendar_age
 from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_agent
 from orchestrator.agents.memory_agent.memory_agent import build_memory_agent
 from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
+from orchestrator.agents.notetaker_agent.notetaker_agent import build_notetaker_agent
 from orchestrator.agents.search_agent import build_search_agent
 from orchestrator.agents.writer_agent import build_writer_agent
 
@@ -88,6 +89,14 @@ SPECIALISTS: list[Specialist] = [
             "compose message text before saving a draft — the other agents write poorly."
         ),
         build=lambda ctx: build_writer_agent(),
+    ),
+    Specialist(
+        name="NoteTakerAgent",
+        when_to_use=(
+            "Use for the user's personal notes: reading, searching, writing new notes, "
+            "and updating/appending to existing ones (to-do lists, journals, ideas, etc.)."
+        ),
+        build=lambda ctx: build_notetaker_agent(),
     ),
 ]
 
