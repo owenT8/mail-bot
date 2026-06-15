@@ -31,12 +31,35 @@ def test_append_creates_and_adds(notes):
     assert notes.read_note("log") == "line1\nline2"
 
 
-def test_search_matches_name_and_body(notes):
-    notes.write_note("trip", "flights to Tucson on Friday")
-    notes.write_note("misc", "nothing relevant")
-    hits = {h["name"] for h in notes.search_notes("tucson")}
-    assert hits == {"trip.md"}
+# --- subfolders ---
 
+def test_write_read_in_subfolder(notes, tmp_path):
+    msg = notes.write_note("work/project-x", "kickoff notes")
+    assert "work/project-x.md" in msg
+    assert (tmp_path / "work" / "project-x.md").exists()  # subfolder created
+    assert notes.read_note("work/project-x") == "kickoff notes"
+
+
+def test_deep_nesting(notes):
+    notes.write_note("journal/2026/june", "midyear")
+    assert notes.read_note("journal/2026/june") == "midyear"
+
+
+def test_list_notes_is_recursive(notes):
+    notes.write_note("top", "a")
+    notes.write_note("work/one", "b")
+    notes.write_note("work/sub/two", "c")
+    assert notes.list_notes() == ["top.md", "work/one.md", "work/sub/two.md"]
+
+
+def test_search_spans_subfolders(notes):
+    notes.write_note("work/trip", "flights to Tucson on Friday")
+    notes.write_note("misc/other", "nothing relevant")
+    hits = {h["name"] for h in notes.search_notes("tucson")}
+    assert hits == {"work/trip.md"}
+
+
+# --- safety / misc ---
 
 def test_read_missing_raises(notes):
     with pytest.raises(FileNotFoundError):
@@ -44,12 +67,12 @@ def test_read_missing_raises(notes):
 
 
 def test_path_traversal_is_blocked(notes, tmp_path):
-    # A name with directory components is reduced to a bare filename inside NOTES_DIR.
-    notes.write_note("../escape", "x")
-    assert (tmp_path / "escape.md").exists()
-    assert not (tmp_path.parent / "escape.md").exists()
+    # Names that resolve outside the notes dir are rejected, not silently rewritten.
     with pytest.raises(ValueError):
-        notes.write_note("..", "x")
+        notes.write_note("../escape", "x")
+    with pytest.raises(ValueError):
+        notes.read_note("../../etc/passwd")
+    assert not (tmp_path.parent / "escape.md").exists()
 
 
 def test_txt_extension_preserved(notes):

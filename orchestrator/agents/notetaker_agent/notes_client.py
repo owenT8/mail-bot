@@ -1,8 +1,9 @@
 """File-backed notes store for the NoteTaker agent.
 
-Notes are plain Markdown files in NOTES_DIR (default ~/my-stuff/Notes). All
-access is constrained to that directory — note names are reduced to a bare
-filename, so the agent can't read or write outside the notes folder.
+Notes are plain Markdown/text files under NOTES_DIR (default ~/my-stuff/Notes),
+organized into any depth of subfolders. Note names are relative paths (e.g.
+"work/ideas.md" or "journal/2026/june"). Every path is resolved and checked to
+stay INSIDE NOTES_DIR, so the agent can't read, write, or delete outside it.
 """
 
 import os
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_NOTES_DIR = "~/my-stuff/Notes"
+NOTE_SUFFIXES = (".md", ".txt")
 MAX_SEARCH_SNIPPET = 200
 
 
@@ -26,59 +28,72 @@ class NotesClient:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _path(self, name: str) -> Path:
-        """Resolve a note name to a path INSIDE notes_dir (no traversal)."""
-        safe = Path(name.strip()).name  # strip any directory components
-        if not safe or safe in (".", ".."):
-            raise ValueError(f"Invalid note name: {name!r}")
-        if not safe.lower().endswith((".md", ".txt")):
-            safe += ".md"
-        return self.notes_dir / safe
+    def _root(self) -> Path:
+        return self.notes_dir.resolve()
 
-    def _ensure_dir(self) -> None:
-        self.notes_dir.mkdir(parents=True, exist_ok=True)
+    def _path(self, name: str) -> Path:
+        """Resolve a (possibly nested) note name to a path inside NOTES_DIR.
+
+        Allows subfolders ("work/ideas.md") but rejects anything that resolves
+        outside the notes directory (e.g. "../secrets").
+        """
+        rel = (name or "").strip().strip("/")
+        if not rel:
+            raise ValueError(f"Invalid note name: {name!r}")
+        candidate = self.notes_dir / rel
+        if not candidate.name.lower().endswith(NOTE_SUFFIXES):
+            candidate = candidate.with_name(candidate.name + ".md")
+        resolved = candidate.resolve()
+        root = self._root()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"Note path escapes the notes directory: {name!r}")
+        return resolved
+
+    def _rel(self, path: Path) -> str:
+        """Path expressed relative to NOTES_DIR, e.g. "work/ideas.md"."""
+        return path.resolve().relative_to(self._root()).as_posix()
 
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
 
     def list_notes(self) -> list[str]:
-        """List note filenames (sorted)."""
+        """List all notes (recursively), as paths relative to the notes dir."""
         if not self.notes_dir.exists():
             return []
         return sorted(
-            p.name
-            for p in self.notes_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in (".md", ".txt")
+            self._rel(p)
+            for p in self.notes_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in NOTE_SUFFIXES
         )
 
     def read_note(self, name: str) -> str:
         """Return a note's full text."""
         path = self._path(name)
         if not path.exists():
-            raise FileNotFoundError(f"No note named {path.name!r}.")
+            raise FileNotFoundError(f"No note named {name!r}.")
         return path.read_text(encoding="utf-8")
 
     def write_note(self, name: str, content: str) -> str:
-        """Create a note, or overwrite it if it already exists."""
-        self._ensure_dir()
+        """Create a note, or overwrite it if it already exists (makes subfolders)."""
         path = self._path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
         path.write_text(content, encoding="utf-8")
         verb = "Updated" if existed else "Created"
-        return f"{verb} note {path.name!r}."
+        return f"{verb} note {self._rel(path)!r}."
 
     def append_note(self, name: str, content: str) -> str:
-        """Append text to a note (creating it if needed)."""
-        self._ensure_dir()
+        """Append text to a note (creating it, and any subfolders, if needed)."""
         path = self._path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         separator = "" if (not existing or existing.endswith("\n")) else "\n"
         path.write_text(existing + separator + content, encoding="utf-8")
-        return f"Appended to note {path.name!r}."
+        return f"Appended to note {self._rel(path)!r}."
 
     def search_notes(self, query: str) -> list[dict]:
-        """Find notes whose name or body contains the query (case-insensitive)."""
+        """Find notes (across all subfolders) whose path or body contains query."""
         q = (query or "").strip().lower()
         results = []
         for name in self.list_notes():
