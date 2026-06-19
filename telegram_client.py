@@ -26,10 +26,14 @@ from telegram.ext import (
 )
 
 from agent_service import AgentService
+from telegram_format import (
+    MAX_TELEGRAM_LENGTH,
+    html_to_plain,
+    markdown_to_telegram_html,
+    split_for_telegram,
+)
 
 load_dotenv()
-
-MAX_TELEGRAM_LENGTH = 4096
 MAX_SESSIONS_LISTED = 10
 INBOX_CARD_LIMIT = 10
 DEFAULT_DIGEST_TIME = "08:00"
@@ -98,14 +102,16 @@ class TelegramClient:
     async def _send_chunks(self, bot, chat_id: int, text: str) -> None:
         if not text or not text.strip():
             text = "(No response was produced.)"
-        for i in range(0, len(text), MAX_TELEGRAM_LENGTH):
-            chunk = text[i : i + MAX_TELEGRAM_LENGTH]
+        # Agents reply in Markdown; convert to Telegram's HTML subset so it renders.
+        html_text = markdown_to_telegram_html(text)
+        for chunk in split_for_telegram(html_text):
             try:
                 await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML")
             except BadRequest:
-                # Content may contain characters that aren't valid HTML entities;
-                # retry as plain text so the message is never silently dropped.
-                await bot.send_message(chat_id=chat_id, text=chunk)
+                # Should be unreachable (the converter escapes everything), but if
+                # Telegram still rejects the HTML, fall back to readable plain text
+                # so the message is never silently dropped.
+                await bot.send_message(chat_id=chat_id, text=html_to_plain(chunk))
 
     async def sendMessage(self, update: Update, text: str) -> None:
         await self._send_chunks(update.get_bot(), update.effective_chat.id, text)
