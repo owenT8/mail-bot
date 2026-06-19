@@ -7,20 +7,22 @@ the call-and-return orchestration — if a specialist isn't wired or loses its
 global_instruction (the date), these fail instead of the bot misbehaving.
 """
 
-import tempfile
-
 import pytest
 
 from orchestrator.agent import build_root_agent
-from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.constants import MODEL, SUBAGENT_MODEL
 from orchestrator.registry import SPECIALISTS, render_team
+
+# TODO(memory): add tests for the new file-based memory once it exists —
+# FileMemoryStore (append-dedup, index refresh, [[link]]/backlink resolution,
+# forget preview-vs-confirmed) and that build_root_agent wires the memory tools +
+# injects the index into global_instruction. MemoryAgent is intentionally gone from
+# SPECIALISTS, so the specialist-wiring tests below no longer cover memory.
 
 
 @pytest.fixture(scope="module")
 def root_agent():
-    mem = ChromaMemoryService(path=tempfile.mkdtemp(prefix="mailbot_test_"))
-    return build_root_agent(mem)
+    return build_root_agent()
 
 
 def test_specialists_are_call_and_return_tools(root_agent):
@@ -82,5 +84,5 @@ def test_model_split(root_agent):
     # Composition/reasoning agents need the capable model.
     assert by_name["WriterAgent"].model == MODEL
     assert by_name["NoteTakerAgent"].model == MODEL
-    for name in ("MessagingAgent", "CalendarAgent", "MemoryAgent", "ResearchAgent"):
+    for name in ("MessagingAgent", "CalendarAgent", "ResearchAgent"):
         assert by_name[name].model == SUBAGENT_MODEL, f"{name} not on SUBAGENT_MODEL"

@@ -1,33 +1,46 @@
 import asyncio
 from pathlib import Path
 
-from google.adk.events.event import Event
-from google.adk.events.event_actions import EventActions
 from google.adk.runners import Runner
-from google.adk.sessions import DatabaseSessionService, Session
+from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
 from orchestrator.agent import build_root_agent
-from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 
 APP_NAME = "Trail-Guide"
-SESSION_NAME_KEY = "session_name"
-AUTO_NAME_LIMIT = 40
+
+# TODO(memory): add MAX_CONTEXT_TOKENS (compaction threshold) here, e.g. a generous
+# default tuned later. When a turn would push the rolling session past it, compact
+# (flush durable facts to the file memory, summarize the in-progress thread, roll to
+# a fresh session seeded with the summary) BEFORE running the model.
 
 
 class AgentService:
+    # TODO(decouple): move this module to core/agent_service.py and add an explicit
+    # `data_dir: Path` parameter so mailbot.db / memory/ stop being anchored to this
+    # file's own location (Path(__file__).parent). main.py should build the
+    # AgentService and pass data_dir + inject it into the Telegram frontend.
     def __init__(self):
         base_dir = Path(__file__).parent
-        self.memory_service = ChromaMemoryService(path=str(base_dir / "memory_db"))
+        # TODO(memory): replace Chroma with the file-based memory web. Construct
+        #   self.memory_store = FileMemoryStore(base_dir / "memory")
+        #   self.memory_extractor = MemoryExtractor(self.memory_store)
+        # (orchestrator/memory/{store,extractor}.py). The old ChromaMemoryService
+        # at base_dir / "memory_db" is gone; a one-off migration script can port
+        # any existing memory_db/ contents into the new memory/ vault.
         self.session_service = DatabaseSessionService(
             db_url=f"sqlite+aiosqlite:///{base_dir / 'mailbot.db'}"
         )
         self.runner = Runner(
-            agent=build_root_agent(self.memory_service),
+            # TODO(memory): pass the memory_store into build_root_agent(...) so the
+            # orchestrator gets ambient recall (index injection) + the memory tools.
+            agent=build_root_agent(),
             app_name=APP_NAME,
             session_service=self.session_service,
-            memory_service=self.memory_service,
+            # NOTE: the `memory_service=` arg was removed — it only fed ADK's
+            # search_memory(), which nothing called. Recall is now ambient via the
+            # orchestrator's global_instruction, not an ADK MemoryService.
         )
         self._active_sessions: dict[str, str] = {}
         # Direct mail client for fast, deterministic button actions (the inbox
@@ -50,7 +63,16 @@ class AgentService:
     async def trash_email(self, uid: str, account: str) -> str:
         return await asyncio.to_thread(self.mail_client.deleteEmail, uid, account)
 
+    # ------------------------------------------------------------------
+    # The single rolling conversation
+    # ------------------------------------------------------------------
+
     async def _get_or_create_active_session(self, user_id: str) -> str:
+        # TODO(memory): this is now the SINGLE rolling conversation per user (the
+        # multi-session UX is gone). Evolve this into _get_or_create_current_session
+        # and add the compaction path: when the current session exceeds
+        # MAX_CONTEXT_TOKENS, run _compact() (flush -> summarize -> roll) and return
+        # the new session id.
         session_id = self._active_sessions.get(user_id)
         if session_id:
             existing = await self.session_service.get_session(
@@ -61,9 +83,16 @@ class AgentService:
             self._active_sessions.pop(user_id, None)
 
         # The active-session pointer is in-memory only, so after a restart it's
-        # empty. Rather than silently starting a new session, resume the user's
-        # most recently updated one if they have any.
-        recent = self._sort_sessions(await self.list_sessions(user_id))
+        # empty. Resume the user's most recently updated session (the rolling
+        # conversation) rather than silently starting a new one.
+        response = await self.session_service.list_sessions(
+            app_name=APP_NAME, user_id=user_id
+        )
+        recent = sorted(
+            response.sessions,
+            key=lambda s: getattr(s, "last_update_time", 0) or 0,
+            reverse=True,
+        )
         if recent:
             self._active_sessions[user_id] = recent[0].id
             return recent[0].id
@@ -74,15 +103,22 @@ class AgentService:
         self._active_sessions[user_id] = session.id
         return session.id
 
-    @staticmethod
-    def _sort_sessions(sessions: list[Session]) -> list[Session]:
-        return sorted(
-            sessions,
-            key=lambda s: getattr(s, "last_update_time", 0) or 0,
-            reverse=True,
-        )
+    # TODO(memory): implement _compact(user_id, session):
+    #   1. flush  -> self.memory_extractor.extract_and_save(session) writes durable
+    #                personal_fact / preference / task_context items into the memory web
+    #   2. summarize -> LLM pass produces a concise running summary of the in-progress
+    #                conversation (open threads, what we're doing now)
+    #   3. roll   -> create_session(user_id, state={"summary": summary}); point
+    #                self._active_sessions[user_id] at the new id. Old session stays in
+    #                SQLite as history.
+    # The summary is injected back into context via the orchestrator's
+    # global_instruction (see orchestrator/agent.py TODO).
 
     async def send(self, user_id: str, message: str) -> str:
+        # TODO(memory): before running, check the current session's context size and
+        # _compact() if it exceeds MAX_CONTEXT_TOKENS, so we never send an over-limit
+        # context to the model. (Compaction is also where automatic memory writes
+        # happen — there is no /closesession anymore.)
         session_id = await self._get_or_create_active_session(user_id)
 
         user_message = types.Content(
@@ -102,97 +138,4 @@ class AgentService:
                     if part.text and not part.thought:
                         final_response += part.text
 
-        await self._maybe_autoname(user_id, session_id, message)
         return final_response
-
-    async def new_session(self, user_id: str, name: str | None = None) -> Session:
-        await self.close_session(user_id)
-        state = {SESSION_NAME_KEY: name} if name else None
-        session = await self.session_service.create_session(
-            app_name=APP_NAME, user_id=user_id, state=state
-        )
-        self._active_sessions[user_id] = session.id
-        return session
-
-    async def close_session(self, user_id: str) -> str | None:
-        session_id = self._active_sessions.pop(user_id, None)
-        if not session_id:
-            return None
-
-        session = await self.session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        if session is None:
-            return session_id
-
-        await self.memory_service.add_session_to_memory(session)
-        return session_id
-
-    async def open_session(self, user_id: str, identifier: str) -> Session | None:
-        target = await self.session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=identifier
-        )
-        if target is None:
-            target = await self.find_session_by_name(user_id, identifier)
-        if target is None:
-            return None
-
-        await self.close_session(user_id)
-        self._active_sessions[user_id] = target.id
-        return target
-
-    async def rename_session(self, user_id: str, name: str) -> bool:
-        session_id = self._active_sessions.get(user_id)
-        if not session_id:
-            return False
-        session = await self.session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        if session is None:
-            return False
-        await self._set_session_name(session, name)
-        return True
-
-    async def list_sessions(self, user_id: str) -> list[Session]:
-        response = await self.session_service.list_sessions(
-            app_name=APP_NAME, user_id=user_id
-        )
-        return list(response.sessions)
-
-    async def find_session_by_name(self, user_id: str, name: str) -> Session | None:
-        target = name.strip().lower()
-        if not target:
-            return None
-        for session in await self.list_sessions(user_id):
-            if (self.session_name(session) or "").lower() == target:
-                # list_sessions doesn't populate events; refetch the full session
-                return await self.session_service.get_session(
-                    app_name=APP_NAME, user_id=user_id, session_id=session.id
-                )
-        return None
-
-    def active_session_id(self, user_id: str) -> str | None:
-        return self._active_sessions.get(user_id)
-
-    @staticmethod
-    def session_name(session: Session) -> str | None:
-        return session.state.get(SESSION_NAME_KEY)
-
-    async def _maybe_autoname(self, user_id: str, session_id: str, first_message: str) -> None:
-        session = await self.session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        if session is None or self.session_name(session):
-            return
-        candidate = first_message.strip().splitlines()[0].strip()[:AUTO_NAME_LIMIT]
-        if not candidate:
-            return
-        await self._set_session_name(session, candidate)
-
-    async def _set_session_name(self, session: Session, name: str) -> None:
-        event = Event(
-            invocation_id="rename",
-            author="user",
-            actions=EventActions(state_delta={SESSION_NAME_KEY: name}),
-        )
-        await self.session_service.append_event(session, event)

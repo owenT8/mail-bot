@@ -34,7 +34,6 @@ from telegram_format import (
 )
 
 load_dotenv()
-MAX_SESSIONS_LISTED = 10
 INBOX_CARD_LIMIT = 10
 DEFAULT_DIGEST_TIME = "08:00"
 DEFAULT_TIMEZONE = "America/Denver"
@@ -53,14 +52,6 @@ def mail_cb(action: str, account: str, uid: str) -> str:
 def parse_mail_cb(data: str) -> tuple[str, str, str]:
     _, action, account, uid = data.split(":", 3)
     return action, account, uid
-
-
-def sess_cb(session_id: str) -> str:
-    return f"sess:open:{session_id}"
-
-
-def parse_sess_cb(data: str) -> str:
-    return data.split(":", 2)[2]
 
 
 def parse_hhmm(value: str) -> str | None:
@@ -93,12 +84,22 @@ class TelegramClient:
         # don't end up in logs.
         logging.getLogger("httpx").setLevel(logging.WARNING)
         self.logger = logging.getLogger(__name__)
+        # TODO(decouple): this module should move to frontends/telegram/client.py and
+        # be renamed TelegramFrontend. Invert ownership: don't construct AgentService
+        # here — accept an injected `agent: AgentService` (built in main.py) plus the
+        # repo root (for telegram_state.pkl). Telegram becomes one frontend, not the
+        # owner of the agent.
         self.agent = AgentService()
 
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------
 
+    # TODO(decouple): extract this into a free function send_markdown(bot, chat_id, text)
+    # in frontends/telegram/outbound.py, and wrap it in a TelegramOutbound class that
+    # implements an OutboundChannel.push(text) protocol (core/delivery.py). That's the
+    # channel-neutral seam a scheduler/task uses to deliver output without knowing about
+    # Telegram (see _digest_job below).
     async def _send_chunks(self, bot, chat_id: int, text: str) -> None:
         if not text or not text.strip():
             text = "(No response was produced.)"
@@ -127,12 +128,7 @@ class TelegramClient:
             "Commands:\n"
             "/inbox – unread emails with tap-to-act buttons\n"
             "/fetchemails – a triaged summary of your latest emails\n"
-            "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n"
-            "/sessions – list sessions (tap to resume)\n"
-            "/newsession [name] – start a fresh conversation\n"
-            "/closesession – close the current session and commit it to memory\n"
-            "/opensession &lt;n|name&gt; – resume a session by index/name\n"
-            "/rename &lt;name&gt; – rename the active session\n",
+            "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n",
             parse_mode="HTML",
         )
 
@@ -252,126 +248,11 @@ class TelegramClient:
             self.logger.error("mail callback failed", exc_info=True)
             await query.answer("Action failed.", show_alert=True)
 
-    # ------------------------------------------------------------------
-    # Sessions
-    # ------------------------------------------------------------------
-
-    async def newSession(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat_id = update.effective_chat.id
-        name = " ".join(context.args).strip() if context.args else None
-        session = await self.agent.new_session(str(chat_id), name=name)
-        self.logger.info(f"New session {session.id} for {chat_id} (name={name!r})")
-        label = name or "(unnamed — auto-named from your first message)"
-        await update.message.reply_text(
-            f"Started a new session: <b>{html.escape(label)}</b>",
-            parse_mode="HTML",
-        )
-
-    async def renameSession(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat_id = update.effective_chat.id
-        name = " ".join(context.args).strip() if context.args else ""
-        if not name:
-            await update.message.reply_text("Usage: /rename <name>")
-            return
-        ok = await self.agent.rename_session(str(chat_id), name)
-        if ok:
-            await update.message.reply_text(
-                f"Renamed active session to <b>{html.escape(name)}</b>.",
-                parse_mode="HTML",
-            )
-        else:
-            await update.message.reply_text("No active session to rename.")
-
-    async def closeSession(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat_id = update.effective_chat.id
-        closed_id = await self.agent.close_session(str(chat_id))
-        if closed_id:
-            self.logger.info(f"Closed session {closed_id} for {chat_id}")
-            await update.message.reply_text("Closed the session and committed it to memory.")
-        else:
-            await update.message.reply_text("No active session to close.")
-
-    async def listSessions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._reply_session_list(update, str(update.effective_chat.id))
-
-    async def openSession(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = str(update.effective_chat.id)
-        sessions = self._sort_sessions(await self.agent.list_sessions(user_id))
-        if not sessions:
-            await update.message.reply_text("You don't have any sessions yet.")
-            return
-        if not context.args:
-            await self._reply_session_list(update, user_id, sessions=sessions)
-            return
-
-        argument = " ".join(context.args).strip()
-        target_session = None
-        if argument.isdigit():
-            index = int(argument) - 1
-            if index < 0 or index >= len(sessions):
-                await update.message.reply_text(f"Pick a number between 1 and {len(sessions)}.")
-                return
-            target_session = sessions[index]
-        else:
-            for session in sessions:
-                if (self.agent.session_name(session) or "").lower() == argument.lower():
-                    target_session = session
-                    break
-            if target_session is None:
-                await update.message.reply_text(f"No session named {argument!r}.")
-                return
-
-        opened = await self.agent.open_session(user_id, target_session.id)
-        if opened is None:
-            await update.message.reply_text("Could not open that session.")
-            return
-        label = self.agent.session_name(opened) or opened.id
-        await update.message.reply_text(
-            f"Resumed session <b>{html.escape(label)}</b>.", parse_mode="HTML"
-        )
-
-    async def _reply_session_list(self, update: Update, user_id: str, sessions=None) -> None:
-        if sessions is None:
-            sessions = self._sort_sessions(await self.agent.list_sessions(user_id))
-        if not sessions:
-            await update.message.reply_text("You don't have any sessions yet.")
-            return
-        active_id = self.agent.active_session_id(user_id)
-        rows = []
-        for session in sessions[:MAX_SESSIONS_LISTED]:
-            name = self.agent.session_name(session) or "(unnamed)"
-            label = ("★ " if session.id == active_id else "") + name
-            rows.append([InlineKeyboardButton(label[:60], callback_data=sess_cb(session.id))])
-        await update.message.reply_text(
-            "<b>Your sessions</b> — tap to resume:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(rows),
-        )
-
-    async def _on_session_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        query = update.callback_query
-        if update.effective_user.id != self.me_id:
-            await query.answer("Not allowed.")
-            return
-        session_id = parse_sess_cb(query.data)
-        user_id = str(update.effective_chat.id)
-        opened = await self.agent.open_session(user_id, session_id)
-        if opened is None:
-            await query.answer("Couldn't open that session.", show_alert=True)
-            return
-        label = self.agent.session_name(opened) or opened.id
-        await query.answer("Resumed ✓")
-        await query.edit_message_text(
-            f"Resumed session <b>{html.escape(label)}</b>.", parse_mode="HTML"
-        )
-
-    @staticmethod
-    def _sort_sessions(sessions):
-        return sorted(
-            sessions,
-            key=lambda s: getattr(s, "last_update_time", 0) or 0,
-            reverse=True,
-        )
+    # TODO(memory): the entire multi-session UX (/newsession, /rename, /closesession,
+    # /sessions, /opensession + the sess: callback and session list) has been removed.
+    # There is now ONE rolling conversation per user; it self-compacts when it grows
+    # (flushing durable facts to memory) — no user-facing session commands. Do NOT
+    # re-add session management here. Plain-text chat (textMessage) is the only entry.
 
     # ------------------------------------------------------------------
     # Morning digest (JobQueue)
@@ -417,6 +298,12 @@ class TelegramClient:
         )
         self.logger.info("Digest scheduled for %02d:%02d %s", hour, minute, self.tz_name)
 
+    # TODO(decouple): this "run a prompt -> deliver the result" job is the future
+    # scheduler in miniature. Extract the run+deliver half into core/tasks.run_task
+    # (AgentTask + an OutboundChannel), so a real scheduler can reuse it:
+    #   await run_task(self.agent, digest_task(str(self.me_id)),
+    #                  TelegramOutbound(context.bot, self.me_id))
+    # The digest scheduling/config (/digest, _reschedule_digest, JobQueue) stays here.
     async def _digest_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             text = await self.agent.send(user_id=str(self.me_id), message=DIGEST_PROMPT)
@@ -443,11 +330,6 @@ class TelegramClient:
             BotCommand("inbox", "Unread emails with action buttons"),
             BotCommand("fetchemails", "Triaged summary of latest emails"),
             BotCommand("digest", "View/set the morning digest"),
-            BotCommand("sessions", "List sessions (tap to resume)"),
-            BotCommand("newsession", "Start a fresh conversation"),
-            BotCommand("closesession", "Close session, commit to memory"),
-            BotCommand("opensession", "Resume a session by index/name"),
-            BotCommand("rename", "Rename the active session"),
         ])
         app.bot_data.setdefault("digest_enabled", True)
         app.bot_data.setdefault("digest_time", DEFAULT_DIGEST_TIME)
@@ -471,13 +353,7 @@ class TelegramClient:
         app.add_handler(CommandHandler("inbox", self.inbox, filters=user_filter))
         app.add_handler(CommandHandler("fetchemails", self.fetchEmails, filters=user_filter))
         app.add_handler(CommandHandler("digest", self.digest, filters=user_filter))
-        app.add_handler(CommandHandler("newsession", self.newSession, filters=user_filter))
-        app.add_handler(CommandHandler("closesession", self.closeSession, filters=user_filter))
-        app.add_handler(CommandHandler("opensession", self.openSession, filters=user_filter))
-        app.add_handler(CommandHandler("rename", self.renameSession, filters=user_filter))
-        app.add_handler(CommandHandler("sessions", self.listSessions, filters=user_filter))
         app.add_handler(CallbackQueryHandler(self._on_mail_callback, pattern="^mail:"))
-        app.add_handler(CallbackQueryHandler(self._on_session_callback, pattern="^sess:"))
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, self.textMessage)
         )

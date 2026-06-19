@@ -6,20 +6,19 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "caldav>=1.3",
-    "chromadb>=1.5.9",
     "dotenv>=0.9.9",
     "google-adk[extensions]>=1.28.1",
     "imap-tools>=1.11.1",
     "python-telegram-bot[job-queue]>=22.7",
     "requests>=2.31",
     "vobject>=0.9",
+    # TODO(memory): add a small YAML/frontmatter parser for the file memory web
+    # (e.g. "pyyaml>=6", or hand-roll a tiny parser). chromadb was removed.
 ]
 [dependency-groups]
 dev = [
     "pytest>=8",
 ]
 
-[tool.uv]
-override-dependencies = [
-  "onnxruntime==1.25.1"
-]
+# NOTE: the [tool.uv] override-dependencies block pinning onnxruntime was removed
+# along with chromadb (onnxruntime was only pulled in by Chroma's embeddings).
