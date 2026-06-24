@@ -13,6 +13,10 @@ from orchestrator.memory.store import FileMemoryStore
 
 APP_NAME = "Trail-Guide"
 
+# The memory web lives under the user's Notes vault (same NOTES_DIR the NoteTaker
+# uses) so it's all one Obsidian vault. Memory notes go in <NOTES_DIR>/memory.
+DEFAULT_NOTES_DIR = "~/my-stuff/Notes"
+
 # When the rolling conversation's replayed context exceeds this (rough) token
 # budget, it is compacted before the next turn: durable facts are flushed to the
 # memory web, the thread is summarized, and we roll to a fresh session seeded with
@@ -25,10 +29,14 @@ class AgentService:
         # data_dir is where persistent state lives (mailbot.db and the memory/
         # vault). It's injected by main.py and defaults to the repo root, so state
         # no longer depends on this module's own file location.
+        # data_dir holds the conversation DB (mailbot.db); defaults to the repo root.
         self.data_dir = Path(data_dir) if data_dir else Path(__file__).resolve().parent.parent
-        # File-based memory web (replaces Chroma). The store backs ambient recall +
-        # the memory tools; the extractor distils durable facts at compaction.
-        self.memory_store = FileMemoryStore(self.data_dir / "memory")
+        # File-based memory web (replaces Chroma). It lives under the Notes vault
+        # (NOTES_DIR, shared with the NoteTaker) at <NOTES_DIR>/memory, so memory and
+        # notes are one Obsidian vault. The store backs ambient recall + the memory
+        # tools; the extractor distils durable facts into it at compaction.
+        notes_dir = Path(os.path.expanduser(os.getenv("NOTES_DIR", DEFAULT_NOTES_DIR)))
+        self.memory_store = FileMemoryStore(notes_dir / "memory")
         self.memory_extractor = MemoryExtractor(self.memory_store)
         self.session_service = DatabaseSessionService(
             db_url=f"sqlite+aiosqlite:///{self.data_dir / 'mailbot.db'}"
