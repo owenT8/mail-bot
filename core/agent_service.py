@@ -17,20 +17,19 @@ APP_NAME = "Trail-Guide"
 
 
 class AgentService:
-    # TODO(decouple): move this module to core/agent_service.py and add an explicit
-    # `data_dir: Path` parameter so mailbot.db / memory/ stop being anchored to this
-    # file's own location (Path(__file__).parent). main.py should build the
-    # AgentService and pass data_dir + inject it into the Telegram frontend.
-    def __init__(self):
-        base_dir = Path(__file__).parent
+    def __init__(self, data_dir: Path | None = None):
+        # data_dir is where persistent state lives (mailbot.db and the memory/
+        # vault). It's injected by main.py and defaults to the repo root, so state
+        # no longer depends on this module's own file location.
+        self.data_dir = data_dir or Path(__file__).resolve().parent.parent
         # TODO(memory): replace Chroma with the file-based memory web. Construct
-        #   self.memory_store = FileMemoryStore(base_dir / "memory")
+        #   self.memory_store = FileMemoryStore(self.data_dir / "memory")
         #   self.memory_extractor = MemoryExtractor(self.memory_store)
         # (orchestrator/memory/{store,extractor}.py). The old ChromaMemoryService
-        # at base_dir / "memory_db" is gone; a one-off migration script can port
+        # at data_dir / "memory_db" is gone; a one-off migration script can port
         # any existing memory_db/ contents into the new memory/ vault.
         self.session_service = DatabaseSessionService(
-            db_url=f"sqlite+aiosqlite:///{base_dir / 'mailbot.db'}"
+            db_url=f"sqlite+aiosqlite:///{self.data_dir / 'mailbot.db'}"
         )
         self.runner = Runner(
             # TODO(memory): pass the memory_store into build_root_agent(...) so the

@@ -14,7 +14,6 @@ from telegram import (
     Update,
     constants,
 )
-from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -25,22 +24,14 @@ from telegram.ext import (
     filters,
 )
 
-from agent_service import AgentService
-from telegram_format import (
-    MAX_TELEGRAM_LENGTH,
-    html_to_plain,
-    markdown_to_telegram_html,
-    split_for_telegram,
-)
+from core.agent_service import AgentService
+from core.tasks import digest_task, run_task
+from frontends.telegram.outbound import TelegramOutbound, send_markdown
 
 load_dotenv()
 INBOX_CARD_LIMIT = 10
 DEFAULT_DIGEST_TIME = "08:00"
 DEFAULT_TIMEZONE = "America/Denver"
-DIGEST_PROMPT = (
-    "Give me my morning digest: triage my unread emails by priority, then list "
-    "today's calendar events. Keep it concise."
-)
 
 
 # --- pure callback_data helpers (kept tiny + testable) ---
@@ -67,8 +58,12 @@ def parse_hhmm(value: str) -> str | None:
     return None
 
 
-class TelegramClient:
-    def __init__(self):
+class TelegramFrontend:
+    """One frontend onto the agent core. It does NOT own the agent — main.py
+    builds the AgentService and injects it here, so other callers (e.g. a future
+    scheduler) talk to the same agent."""
+
+    def __init__(self, agent: AgentService, data_dir: Path):
         token = os.getenv("TELEGRAM_TOKEN")
         user_id = os.getenv("TELEGRAM_USER_ID")
         if not token or not user_id:
@@ -78,41 +73,23 @@ class TelegramClient:
         self.bot_id = token
         self.me_id = int(user_id)
         self.tz_name = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
+        self.data_dir = data_dir  # for telegram_state.pkl
         logging.basicConfig(level=logging.INFO)
         # httpx logs full request URLs at INFO, which includes the Telegram bot
         # token (https://api.telegram.org/bot<TOKEN>/...). Quiet it so secrets
         # don't end up in logs.
         logging.getLogger("httpx").setLevel(logging.WARNING)
         self.logger = logging.getLogger(__name__)
-        # TODO(decouple): this module should move to frontends/telegram/client.py and
-        # be renamed TelegramFrontend. Invert ownership: don't construct AgentService
-        # here — accept an injected `agent: AgentService` (built in main.py) plus the
-        # repo root (for telegram_state.pkl). Telegram becomes one frontend, not the
-        # owner of the agent.
-        self.agent = AgentService()
+        self.agent = agent
 
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------
 
-    # TODO(decouple): extract this into a free function send_markdown(bot, chat_id, text)
-    # in frontends/telegram/outbound.py, and wrap it in a TelegramOutbound class that
-    # implements an OutboundChannel.push(text) protocol (core/delivery.py). That's the
-    # channel-neutral seam a scheduler/task uses to deliver output without knowing about
-    # Telegram (see _digest_job below).
     async def _send_chunks(self, bot, chat_id: int, text: str) -> None:
-        if not text or not text.strip():
-            text = "(No response was produced.)"
-        # Agents reply in Markdown; convert to Telegram's HTML subset so it renders.
-        html_text = markdown_to_telegram_html(text)
-        for chunk in split_for_telegram(html_text):
-            try:
-                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML")
-            except BadRequest:
-                # Should be unreachable (the converter escapes everything), but if
-                # Telegram still rejects the HTML, fall back to readable plain text
-                # so the message is never silently dropped.
-                await bot.send_message(chat_id=chat_id, text=html_to_plain(chunk))
+        # The actual rendering/splitting lives in outbound.send_markdown (also used
+        # by TelegramOutbound, the OutboundChannel a task/scheduler delivers through).
+        await send_markdown(bot, chat_id, text)
 
     async def sendMessage(self, update: Update, text: str) -> None:
         await self._send_chunks(update.get_bot(), update.effective_chat.id, text)
@@ -298,16 +275,13 @@ class TelegramClient:
         )
         self.logger.info("Digest scheduled for %02d:%02d %s", hour, minute, self.tz_name)
 
-    # TODO(decouple): this "run a prompt -> deliver the result" job is the future
-    # scheduler in miniature. Extract the run+deliver half into core/tasks.run_task
-    # (AgentTask + an OutboundChannel), so a real scheduler can reuse it:
-    #   await run_task(self.agent, digest_task(str(self.me_id)),
-    #                  TelegramOutbound(context.bot, self.me_id))
-    # The digest scheduling/config (/digest, _reschedule_digest, JobQueue) stays here.
+    # The digest's run+deliver half goes through the channel-neutral core.tasks
+    # seam — a future scheduler reuses run_task with its own OutboundChannel. Only
+    # the scheduling/config (/digest, _reschedule_digest, JobQueue) stays here.
     async def _digest_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
-            text = await self.agent.send(user_id=str(self.me_id), message=DIGEST_PROMPT)
-            await self._send_chunks(context.bot, self.me_id, text or "(no digest)")
+            outbound = TelegramOutbound(context.bot, self.me_id)
+            await run_task(self.agent, digest_task(str(self.me_id)), outbound)
         except Exception:
             self.logger.error("Digest job failed", exc_info=True)
 
@@ -337,8 +311,9 @@ class TelegramClient:
 
     def run(self) -> None:
         self.logger.info("Starting Telegram Bot...")
-        base_dir = Path(__file__).parent
-        persistence = PicklePersistence(filepath=str(base_dir / "telegram_state.pkl"))
+        persistence = PicklePersistence(
+            filepath=str(self.data_dir / "telegram_state.pkl")
+        )
         app = (
             Application.builder()
             .token(self.bot_id)

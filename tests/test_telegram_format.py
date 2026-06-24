@@ -5,7 +5,7 @@ as valid Telegram HTML, and any character that could break a send (< & >) must b
 escaped rather than passed through.
 """
 
-from telegram_format import (
+from frontends.telegram.format import (
     html_to_plain,
     markdown_to_telegram_html,
     split_for_telegram,
