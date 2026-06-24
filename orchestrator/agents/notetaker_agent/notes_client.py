@@ -16,6 +16,11 @@ load_dotenv()
 DEFAULT_NOTES_DIR = "~/my-stuff/Notes"
 NOTE_SUFFIXES = (".md", ".txt")
 MAX_SEARCH_SNIPPET = 200
+# Top-level subfolders the NoteTaker must not touch. The agent's long-term memory
+# web lives at NOTES_DIR/memory and is owned by FileMemoryStore (which maintains an
+# index, dedup, and backlinks); letting the NoteTaker read/overwrite those notes
+# would corrupt that structure. It stays visible in Obsidian, just not to this agent.
+RESERVED_DIRS = ("memory",)
 
 
 class NotesClient:
@@ -30,6 +35,14 @@ class NotesClient:
 
     def _root(self) -> Path:
         return self.notes_dir.resolve()
+
+    def _is_reserved(self, path: Path) -> bool:
+        """True if `path` lives under a reserved top-level subfolder (e.g. memory/)."""
+        try:
+            rel = path.resolve().relative_to(self._root())
+        except ValueError:
+            return False
+        return bool(rel.parts) and rel.parts[0] in RESERVED_DIRS
 
     def _path(self, name: str) -> Path:
         """Resolve a (possibly nested) note name to a path inside NOTES_DIR.
@@ -47,6 +60,11 @@ class NotesClient:
         root = self._root()
         if resolved != root and root not in resolved.parents:
             raise ValueError(f"Note path escapes the notes directory: {name!r}")
+        if self._is_reserved(resolved):
+            raise ValueError(
+                f"{name!r} is in the reserved memory/ folder; the NoteTaker can't "
+                "read or write the agent's memory."
+            )
         return resolved
 
     def _rel(self, path: Path) -> str:
@@ -64,7 +82,9 @@ class NotesClient:
         return sorted(
             self._rel(p)
             for p in self.notes_dir.rglob("*")
-            if p.is_file() and p.suffix.lower() in NOTE_SUFFIXES
+            if p.is_file()
+            and p.suffix.lower() in NOTE_SUFFIXES
+            and not self._is_reserved(p)
         )
 
     def read_note(self, name: str) -> str:

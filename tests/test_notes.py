@@ -78,3 +78,23 @@ def test_path_traversal_is_blocked(notes, tmp_path):
 def test_txt_extension_preserved(notes):
     notes.write_note("plain.txt", "hi")
     assert "plain.txt" in notes.list_notes()
+
+
+# --- memory/ is fenced off (owned by FileMemoryStore, not the NoteTaker) ---
+
+def test_memory_folder_is_hidden_from_listing(notes, tmp_path):
+    notes.write_note("top", "a")
+    # A memory note placed directly on disk (as FileMemoryStore would) must not
+    # surface via the NoteTaker's listing or search.
+    mem = tmp_path / "memory" / "people"
+    mem.mkdir(parents=True)
+    (mem / "owen.md").write_text("# Owen\n- likes hiking")
+    assert notes.list_notes() == ["top.md"]
+    assert notes.search_notes("hiking") == []
+
+
+def test_memory_paths_are_rejected(notes):
+    with pytest.raises(ValueError):
+        notes.write_note("memory/people/owen", "x")
+    with pytest.raises(ValueError):
+        notes.read_note("memory/people/owen")
