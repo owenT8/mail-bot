@@ -225,11 +225,10 @@ class TelegramFrontend:
             self.logger.error("mail callback failed", exc_info=True)
             await query.answer("Action failed.", show_alert=True)
 
-    # TODO(memory): the entire multi-session UX (/newsession, /rename, /closesession,
-    # /sessions, /opensession + the sess: callback and session list) has been removed.
-    # There is now ONE rolling conversation per user; it self-compacts when it grows
-    # (flushing durable facts to memory) — no user-facing session commands. Do NOT
-    # re-add session management here. Plain-text chat (textMessage) is the only entry.
+    # NOTE: there is intentionally no multi-session UX (/newsession, /rename,
+    # /closesession, /sessions, /opensession). There is ONE rolling conversation per
+    # user that self-compacts when it grows (flushing durable facts to memory). Do
+    # NOT re-add session management here — plain-text chat (textMessage) is the entry.
 
     # ------------------------------------------------------------------
     # Morning digest (JobQueue)

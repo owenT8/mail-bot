@@ -2217,6 +2217,7 @@ dependencies = [
     { name = "google-adk", extra = ["extensions"] },
     { name = "imap-tools" },
     { name = "python-telegram-bot", extra = ["job-queue"] },
+    { name = "pyyaml" },
     { name = "requests" },
     { name = "vobject" },
 ]
@@ -2233,6 +2234,7 @@ requires-dist = [
     { name = "google-adk", extras = ["extensions"], specifier = ">=1.28.1" },
     { name = "imap-tools", specifier = ">=1.11.1" },
     { name = "python-telegram-bot", extras = ["job-queue"], specifier = ">=22.7" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "requests", specifier = ">=2.31" },
     { name = "vobject", specifier = ">=0.9" },
 ]

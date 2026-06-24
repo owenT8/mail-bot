@@ -17,19 +17,17 @@ from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_
 from orchestrator.agents.notetaker_agent.notetaker_agent import build_notetaker_agent
 from orchestrator.agents.search_agent import build_search_agent
 from orchestrator.agents.writer_agent import build_writer_agent
+from orchestrator.memory.store import FileMemoryStore
 
 
 @dataclass
 class AgentContext:
     """Shared services handed to specialist builders."""
 
-    # TODO(memory): add `memory_store: FileMemoryStore` here once the new
-    # file-based memory store exists (orchestrator/memory/store.py). It used to
-    # carry the ChromaMemoryService; memory is no longer a routed specialist, so
-    # the store is wired into the orchestrator directly (see agent.py), not via
-    # a Specialist builder. AgentContext is intentionally empty for now — the
-    # remaining specialist builders ignore it.
-    pass
+    # The file-based memory store. Memory is not a routed specialist; the store is
+    # wired into the orchestrator directly (see agent.py). It's carried here too in
+    # case a specialist ever needs read access — current builders ignore it.
+    memory_store: FileMemoryStore
 
 
 @dataclass(frozen=True)
@@ -73,12 +71,12 @@ SPECIALISTS: list[Specialist] = [
         ),
         build=lambda ctx: build_calendar_agent(),
     ),
-    # TODO(memory): MemoryAgent removed. Memory is no longer a routed specialist
-    # you delegate to — it's a substrate. Recall becomes ambient (the memory
-    # index is injected into the orchestrator's global_instruction every turn),
-    # and writes happen automatically at compaction. Explicit remember/recall/
-    # forget become plain tools on the orchestrator (see agent.py + the future
-    # orchestrator/memory/tools.py). Do NOT re-add a Specialist entry here.
+    # NOTE: there is intentionally no MemoryAgent. Memory is not a routed specialist
+    # — it's a substrate. Recall is ambient (the memory index is injected into the
+    # orchestrator's global_instruction every turn) and writes happen automatically
+    # at compaction; explicit remember/recall/forget are plain tools on the
+    # orchestrator (see agent.py + orchestrator/memory/tools.py). Do NOT re-add a
+    # Specialist entry here.
     Specialist(
         name="WriterAgent",
         when_to_use=(

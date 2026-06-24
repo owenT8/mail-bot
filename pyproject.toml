@@ -10,10 +10,9 @@ dependencies = [
     "google-adk[extensions]>=1.28.1",
     "imap-tools>=1.11.1",
     "python-telegram-bot[job-queue]>=22.7",
+    "pyyaml>=6",            # YAML frontmatter for the file-based memory notes
     "requests>=2.31",
     "vobject>=0.9",
-    # TODO(memory): add a small YAML/frontmatter parser for the file memory web
-    # (e.g. "pyyaml>=6", or hand-roll a tiny parser). chromadb was removed.
 ]
 [dependency-groups]
 dev = [

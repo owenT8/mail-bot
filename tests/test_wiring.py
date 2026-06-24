@@ -7,22 +7,41 @@ the call-and-return orchestration — if a specialist isn't wired or loses its
 global_instruction (the date), these fail instead of the bot misbehaving.
 """
 
+import tempfile
+
 import pytest
 
 from orchestrator.agent import build_root_agent
 from orchestrator.constants import MODEL, SUBAGENT_MODEL
+from orchestrator.memory.store import FileMemoryStore
 from orchestrator.registry import SPECIALISTS, render_team
 
-# TODO(memory): add tests for the new file-based memory once it exists —
-# FileMemoryStore (append-dedup, index refresh, [[link]]/backlink resolution,
-# forget preview-vs-confirmed) and that build_root_agent wires the memory tools +
-# injects the index into global_instruction. MemoryAgent is intentionally gone from
-# SPECIALISTS, so the specialist-wiring tests below no longer cover memory.
+# Memory is no longer a specialist (gone from SPECIALISTS), so the specialist-wiring
+# tests below don't cover it; FileMemoryStore behavior is tested in
+# tests/test_memory_store.py, and memory-tool/index wiring is asserted here.
 
 
 @pytest.fixture(scope="module")
 def root_agent():
-    return build_root_agent()
+    store = FileMemoryStore(tempfile.mkdtemp(prefix="mailbot_mem_"))
+    return build_root_agent(store)
+
+
+def test_memory_tools_wired_on_orchestrator(root_agent):
+    # Memory is handled directly by the orchestrator, not a specialist: the plain
+    # tools must be present alongside the specialist AgentTools.
+    names = {getattr(t, "__name__", None) or getattr(t, "name", None) for t in root_agent.tools}
+    for tool in ("recall_memory", "read_memory", "save_memory", "forget_memory"):
+        assert tool in names, f"{tool} not wired onto the orchestrator"
+
+
+def test_orchestrator_injects_memory_index(root_agent):
+    # global_instruction is a provider that injects the memory index for ambient recall.
+    class _Ctx:  # minimal stand-in exposing .state (datetime provider ignores the rest)
+        state = {}
+
+    text = root_agent.global_instruction(_Ctx())
+    assert "<known_about_owen>" in text
 
 
 def test_specialists_are_call_and_return_tools(root_agent):

@@ -1,87 +1,52 @@
-# Refactor TODO
+# Refactor status
 
-Two refactors live on this branch (`feature/memory-and-decoupling-refactor`). The teardown
-commit removed the old code and left **greppable hint comments** at every seam:
+Both refactors on this branch are now **implemented**. History:
+1. `teardown` — removed Chroma + multi-session UX, left hint comments
+2. `decouple` — core/ + frontends/ packages, ownership inverted
+3. `memory` — file-based memory web + single rolling conversation with compaction
 
-```
-git grep -n "TODO(memory)\|TODO(decouple)"
-```
+`git grep -n "TODO(memory)\|TODO(decouple)"` should now return nothing.
 
-> The branch intentionally **does not run / fully pass tests yet** — the deletions left
-> `TODO`-stubbed gaps in `agent_service.py` and `orchestrator/agent.py` for you to fill.
+## A. Memory + single rolling conversation — DONE
+- [x] `orchestrator/memory/store.py` — `FileMemoryStore`: Obsidian-flavored notes
+  (frontmatter + `[[wikilinks]]`), generated `index.md`, ripgrep search (+ pure-Python
+  fallback), append-with-dedup `upsert`, `read_note` w/ backlinks, `forget` (confirm).
+- [x] `orchestrator/memory/extractor.py` — `MemoryExtractor`: `extract_and_save` (distil
+  durable facts to the web) + `summarize_session` (running summary), cheap subagent model.
+- [x] `orchestrator/memory/tools.py` — recall / read / save / forget tools.
+- [x] `orchestrator/memory/instruction.py` — ambient recall: inject the index (+ summary)
+  into the orchestrator's `global_instruction` every turn.
+- [x] Wired into `orchestrator/agent.py` (tools + instruction), `registry.py`
+  (`AgentContext.memory_store`), `constants.py` (`<memory>` prompt section + extraction/
+  summary prompts).
+- [x] `core/agent_service.py` — store + extractor; single rolling session; `MAX_CONTEXT_TOKENS`
+  + `_estimate_tokens` + `_compact` (flush → summarize → roll). Compaction is where automatic
+  memory writes happen (no `/closesession`).
+- [x] `pyyaml` added to deps.
+- [x] Tests: `tests/test_memory_store.py`, `tests/test_memory_compaction.py`, wiring updates.
 
----
+## B. Telegram decoupling — DONE
+- [x] `core/` (agent_service w/ injected `data_dir`, `delivery.py` `OutboundChannel`,
+  `tasks.py` `run_task`/`digest_task`).
+- [x] `frontends/telegram/` (client `TelegramFrontend` w/ injected agent, format, outbound
+  `send_markdown` + `TelegramOutbound`); digest routed through `run_task`.
+- [x] `main.py` builds the agent and injects it into the frontend.
 
-## A. Memory + single rolling conversation
+## Remaining / for you
+- [ ] **Live end-to-end run.** I can't run the bot here (no readable `.env`, no real API
+  keys / Telegram). Verify against a real bot: chat past `MAX_CONTEXT_TOKENS` to trigger a
+  compaction, confirm a fresh `memory/` note appears + `index.md` updates without asking to
+  save, and that a later turn recalls it. Tune `MAX_CONTEXT_TOKENS` (env) to taste.
+- [ ] **(Optional) migrate old `memory_db/`.** Not written — a migration would need `chromadb`
+  temporarily reinstalled to read the old vector store, then `FileMemoryStore.upsert` each
+  fact. Only worth it if the existing `memory_db/` holds memories you care about; otherwise
+  delete it.
+- [ ] **(Optional) git-per-write / Quartz** for visualizing the memory web growing (see the
+  conversation); `FileMemoryStore` has a clean seam to add a `git_commit()` per write.
 
-**Goal:** replace ChromaDB with a human-readable, Obsidian-compatible *web of linked markdown
-notes*; make recall ambient and writes automatic; collapse multi-session management into a single
-rolling conversation that self-compacts.
-
-Already removed: `orchestrator/agents/memory_agent/` (Chroma + the routed MemoryAgent), the
-multi-session methods in `agent_service.py`, the session UX in `telegram_client.py`, the
-`chromadb`/`onnxruntime` deps.
-
-- [ ] **Build the store** — `orchestrator/memory/store.py` `FileMemoryStore` (pure file I/O, no
-  LLM): a `memory/` vault of entity/topic notes (`people/`, `projects/`, `preferences/`,
-  `facts/`) + a generated `index.md`. Obsidian-flavored markdown — YAML frontmatter
-  (`type`, `created`, `updated`, `tags`), body bullets, `[[wikilinks]]` by note name. Methods:
-  `read_index`, `search` (ripgrep, pure-Python glob fallback), `read_note` (+ backlinks),
-  `upsert` (append-with-dedup or create; refresh index; add links), `forget` (preview vs
-  confirmed). Optional `git_commit()` per write for history/growth-viz.
-- [ ] **Build the extractor** — `orchestrator/memory/extractor.py` `MemoryExtractor`
-  (cheap `SUBAGENT_MODEL`): given conversation events + the current index, emit durable
-  `type | target_note | fact | related` items (or `NONE`) and apply via `store.upsert`.
-- [ ] **Memory tools** — `orchestrator/memory/tools.py`: `recall_memory`, `read_memory`,
-  `save_memory`, `forget_memory` (plain functions bound to a store; `tool_context.user_id`).
-- [ ] **Ambient recall** — `orchestrator/memory/instruction.py` `memory_global_instruction(store)`
-  injecting the index; compose it with `datetime_global_instruction` (+ the conversation summary
-  from session state) in `build_root_agent`. → `TODO(memory)` in `orchestrator/agent.py`.
-- [ ] **Wire the orchestrator** — `build_root_agent(memory_store)`: append the memory tools;
-  set the composed `global_instruction`. Add a `<memory>` section to `ORCHESTRATOR_PROMPT`
-  (`orchestrator/constants.py`): known facts are in context; routine saves are automatic
-  (don't narrate); use the tools for explicit asks. Loosen "never act directly / always delegate"
-  to carve out memory. → `AgentContext.memory_store` in `orchestrator/registry.py`.
-- [ ] **Wire the service** — `agent_service.py`: construct `FileMemoryStore` + `MemoryExtractor`;
-  pass the store into `build_root_agent`. → `TODO(memory)` markers in `__init__`.
-- [ ] **Rolling conversation + compaction** — add `MAX_CONTEXT_TOKENS`; in `send()`, check
-  context size and `_compact()` before running. `_compact()` = flush
-  (`extractor.extract_and_save`) → summarize (LLM) → roll (`create_session(state={"summary":…})`
-  + repoint `_active_sessions`). Inject `state["summary"]` via the orchestrator instruction.
-  **Verify** an `InstructionProvider`'s `ReadonlyContext` exposes session `state`; if not, seed
-  the summary as the new session's first event. → `TODO(memory)` markers in `agent_service.py`.
-- [ ] **Deps** — add a YAML/frontmatter parser to `pyproject.toml` (`pyyaml` or hand-rolled).
-- [ ] **Migration (optional)** — `scripts/migrate_chroma_to_files.py`: read any existing
-  `memory_db/` via `collection.get()` and `upsert` each fact into `memory/`. Skip if empty.
-- [ ] **Tests** — `tests/test_memory_store.py` (no LLM) + compaction unit test (stub
-  extractor/summarizer). Update `tests/test_wiring.py` per its `TODO(memory)`.
-
-## B. Telegram decoupling (structural moves — mostly your work)
-
-**Goal:** the agent core stands alone; Telegram is one frontend; a future scheduler is another
-caller. No deletions were needed for this — only `TODO(decouple)` hints were placed.
-
-- [ ] **Create packages** — `core/` (`agent_service.py`, `delivery.py`, `tasks.py`) and
-  `frontends/telegram/` (`client.py`, `format.py`, `outbound.py`). Add `__init__.py`s.
-- [ ] **Move** `agent_service.py` → `core/agent_service.py` and give it an explicit
-  `data_dir: Path` (stop anchoring `mailbot.db`/`memory/` to `Path(__file__).parent`).
-  → `TODO(decouple)` in `agent_service.py`.
-- [ ] **Outbound seam** — `core/delivery.py` `OutboundChannel` protocol (`push(text)`);
-  `frontends/telegram/outbound.py` `send_markdown(bot, chat_id, text)` (extracted from
-  `_send_chunks`) + `TelegramOutbound`. → `TODO(decouple)` at `_send_chunks`.
-- [ ] **Task seam** — `core/tasks.py` `AgentTask` + `run_task(agent, task, deliver)` +
-  `digest_task(user_id)`; route `_digest_job` through it. → `TODO(decouple)` at `_digest_job`.
-- [ ] **Move + rename** `telegram_client.py` → `frontends/telegram/client.py`
-  (`TelegramClient` → `TelegramFrontend`); inject `agent` + repo root instead of constructing
-  `AgentService`. Move `telegram_format.py` → `frontends/telegram/format.py`.
-  → `TODO(decouple)` in `__init__`.
-- [ ] **Invert ownership in `main.py`** — build `AgentService` and inject it into the frontend.
-  → `TODO(decouple)` in `main.py` (skeleton included there).
-
----
-
-### Suggested order
-A is the bigger behavioral change; B is mechanical. They're independent — the automatic-write
-hook lives in `AgentService.send` either way. Doing **B first** (clean package layout) can make A
-tidier, but either order works. A future "memory gardener" (periodic consolidation) is a natural
-job for B's `run_task` scheduler seam.
+## Verified here
+`uv run pytest tests/` → 73 passed. Full `AgentService` constructs with the memory tools wired,
+the index + conversation summary inject into context, `memory/` + `mailbot.db` resolve under the
+injected `data_dir`, and the decoupled import graph is clean (`TelegramOutbound` satisfies the
+`OutboundChannel` protocol). Behavior that needs a live model (extraction quality, summary
+quality) is exercised structurally with stubs, not against a real LLM.
