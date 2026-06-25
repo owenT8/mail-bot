@@ -32,19 +32,22 @@ def test_digest_always_delivers():
 def test_heartbeat_delivers_when_noteworthy():
     agent = FakeAgent("Urgent: your manager needs a reply by 3pm.")
     out = FakeOutbound()
-    asyncio.run(run_heartbeat(agent, "check things", out))
+    delivered = asyncio.run(run_heartbeat(agent, "check things", out))
     assert out.pushed == ["Urgent: your manager needs a reply by 3pm."]
+    assert delivered == "Urgent: your manager needs a reply by 3pm."  # reported to caller
     # the sentinel directive was appended to the instructions
     assert HEARTBEAT_SENTINEL in agent.prompt
 
 
 def test_heartbeat_silent_on_sentinel():
     out = FakeOutbound()
-    asyncio.run(run_heartbeat(FakeAgent(HEARTBEAT_SENTINEL), "check things", out))
+    delivered = asyncio.run(run_heartbeat(FakeAgent(HEARTBEAT_SENTINEL), "check things", out))
     assert out.pushed == []
+    assert delivered is None
 
 
 def test_heartbeat_silent_on_empty():
     out = FakeOutbound()
-    asyncio.run(run_heartbeat(FakeAgent("   "), "check things", out))
+    delivered = asyncio.run(run_heartbeat(FakeAgent("   "), "check things", out))
     assert out.pushed == []
+    assert delivered is None

@@ -36,8 +36,14 @@ async def run_digest(
 
 async def run_heartbeat(
     agent: "AgentService", instructions: str, deliver: OutboundChannel
-) -> None:
-    """Run the heartbeat instructions; deliver ONLY if there's something noteworthy."""
+) -> str | None:
+    """Run the heartbeat instructions; deliver ONLY if there's something noteworthy.
+
+    Returns the delivered text, or None if the run was suppressed (nothing to report)
+    — so callers can log/report the outcome.
+    """
     text = (await agent.run_isolated(instructions + _HEARTBEAT_DIRECTIVE) or "").strip()
     if text and HEARTBEAT_SENTINEL not in text.upper():
         await deliver.push(text)
+        return text
+    return None

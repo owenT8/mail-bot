@@ -315,12 +315,26 @@ class TelegramFrontend:
             await update.message.reply_text(
                 f"Heartbeat is <b>{status}</b>. It runs your <code>heartbeat.md</code> "
                 "instructions on an interval and only messages you if something needs "
-                "attention.\nUse <code>/heartbeat 30m</code> (s/m/h/d), or "
-                "<code>/heartbeat off</code>.",
+                "attention.\nUse <code>/heartbeat 30m</code> (s/m/h/d), "
+                "<code>/heartbeat off</code>, or <code>/heartbeat now</code> to test it.",
                 parse_mode="HTML",
             )
             return
         arg = context.args[0].strip().lower()
+        if arg == "now":
+            # Fire once immediately, for testing — reports the outcome inline.
+            await update.message.reply_text("Running the heartbeat now…")
+            try:
+                delivered = await self._run_heartbeat_once(context.bot)
+            except Exception:
+                self.logger.error("Manual heartbeat failed", exc_info=True)
+                await update.message.reply_text("⚠️ Heartbeat run failed (see logs).")
+                return
+            if not delivered:
+                await update.message.reply_text(
+                    "Heartbeat ran — nothing noteworthy right now."
+                )
+            return
         if arg == "off":
             bot_data["heartbeat_enabled"] = False
             self._reschedule_heartbeat(context.application)
@@ -351,11 +365,23 @@ class TelegramFrontend:
         )
         self.logger.info("Heartbeat scheduled every %ss", seconds)
 
+    async def _run_heartbeat_once(self, bot) -> str | None:
+        """Read the heartbeat runbook and run it; return delivered text or None."""
+        instructions = self.agent.agent_dir.read_runbook("heartbeat")
+        return await run_heartbeat(
+            self.agent, instructions, TelegramOutbound(bot, self.me_id)
+        )
+
     async def _heartbeat_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self.logger.info("Heartbeat firing (scheduled)")
         try:
-            instructions = self.agent.agent_dir.read_runbook("heartbeat")
-            outbound = TelegramOutbound(context.bot, self.me_id)
-            await run_heartbeat(self.agent, instructions, outbound)
+            delivered = await self._run_heartbeat_once(context.bot)
+            self.logger.info(
+                "Heartbeat ran: %s",
+                f"delivered ({len(delivered)} chars)"
+                if delivered
+                else "nothing noteworthy (suppressed)",
+            )
         except Exception:
             self.logger.error("Heartbeat job failed", exc_info=True)
 
