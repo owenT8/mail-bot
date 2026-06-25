@@ -1,6 +1,8 @@
 """Tests for the pure mail helpers — draft MIME building, reply subjects, and
 per-account special folders. No network."""
 
+import types
+
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 
 
@@ -43,3 +45,56 @@ def test_build_message_reply_sets_threading_headers():
     )
     assert msg["In-Reply-To"] == "<abc123@mail.example.com>"
     assert msg["References"] == "<abc123@mail.example.com>"
+
+
+# --- moveToFolder creates the destination (e.g. "Important") if missing ---
+
+class _FakeFolderMgr:
+    def __init__(self, existing):
+        self.existing = set(existing)
+        self.created = []
+
+    def exists(self, name):
+        return name in self.existing
+
+    def create(self, name):
+        self.created.append(name)
+        self.existing.add(name)
+
+
+class _FakeMailbox:
+    def __init__(self, existing):
+        self.folder = _FakeFolderMgr(existing)
+        self.moved = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def move(self, uid, folder):
+        self.moved.append((uid, folder))
+
+
+def _client_with_mailbox(mailbox):
+    mc = MailClient.__new__(MailClient)  # bypass __init__ (no env / no accounts)
+    mc._account = lambda account: types.SimpleNamespace(label=account)
+    mc._mailbox = lambda target: mailbox
+    return mc
+
+
+def test_move_creates_missing_folder():
+    mb = _FakeMailbox(existing=["INBOX"])
+    mc = _client_with_mailbox(mb)
+    mc.moveToFolder("42", "Important", "icloud")
+    assert mb.folder.created == ["Important"]  # created on the fly
+    assert ("42", "Important") in mb.moved
+
+
+def test_move_does_not_recreate_existing_folder():
+    mb = _FakeMailbox(existing=["Important"])
+    mc = _client_with_mailbox(mb)
+    mc.moveToFolder("42", "Important", "icloud")
+    assert mb.folder.created == []  # already there
+    assert ("42", "Important") in mb.moved

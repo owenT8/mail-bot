@@ -240,9 +240,11 @@ class MailClient:
     # ------------------------------------------------------------------
 
     def moveToFolder(self, email_uid: str, folder: str, account: str) -> str:
-        """Move an email to a folder within the given account."""
+        """Move an email to a folder within the given account, creating it if needed."""
         target = self._account(account)
         with self._mailbox(target) as mailbox:
+            if not mailbox.folder.exists(folder):
+                mailbox.folder.create(folder)
             mailbox.move(email_uid, folder)
         return f"Moved email {email_uid} to {folder} in {account}."
 
