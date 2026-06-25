@@ -47,7 +47,7 @@ def test_build_message_reply_sets_threading_headers():
     assert msg["References"] == "<abc123@mail.example.com>"
 
 
-# --- moveToFolder creates the destination (e.g. "Important") if missing ---
+# --- archive_emails / move_to_important: batch, group by account, auto-create folder ---
 
 class _FakeFolderMgr:
     def __init__(self, existing):
@@ -65,7 +65,7 @@ class _FakeFolderMgr:
 class _FakeMailbox:
     def __init__(self, existing):
         self.folder = _FakeFolderMgr(existing)
-        self.moved = []
+        self.moved = []  # list of (uids, folder)
 
     def __enter__(self):
         return self
@@ -73,28 +73,46 @@ class _FakeMailbox:
     def __exit__(self, *a):
         return False
 
-    def move(self, uid, folder):
-        self.moved.append((uid, folder))
+    def move(self, uids, folder):
+        self.moved.append((uids, folder))
 
 
-def _client_with_mailbox(mailbox):
+def _client(mailboxes_by_label):
     mc = MailClient.__new__(MailClient)  # bypass __init__ (no env / no accounts)
-    mc._account = lambda account: types.SimpleNamespace(label=account)
-    mc._mailbox = lambda target: mailbox
+    mc._require_accounts = lambda: None
+    mc._account = lambda label: types.SimpleNamespace(label=label)
+    mc._mailbox = lambda target: mailboxes_by_label[target.label]
     return mc
 
 
-def test_move_creates_missing_folder():
+def test_archive_batches_by_account():
+    gmail = _FakeMailbox(existing=["[Gmail]/All Mail"])
+    icloud = _FakeMailbox(existing=["Archive"])
+    mc = _client({"gmail": gmail, "icloud": icloud})
+    mc.archiveEmails([
+        {"uid": "1", "account": "gmail"},
+        {"uid": "2", "account": "gmail"},
+        {"uid": "3", "account": "icloud"},
+    ])
+    assert gmail.moved == [(["1", "2"], "[Gmail]/All Mail")]  # one move per account
+    assert icloud.moved == [(["3"], "Archive")]
+    assert gmail.folder.created == [] and icloud.folder.created == []  # archives exist
+
+
+def test_move_to_important_creates_folder_once():
     mb = _FakeMailbox(existing=["INBOX"])
-    mc = _client_with_mailbox(mb)
-    mc.moveToFolder("42", "Important", "icloud")
+    mc = _client({"icloud": mb})
+    mc.moveToImportant([
+        {"uid": "9", "account": "icloud"},
+        {"uid": "10", "account": "icloud"},
+    ])
     assert mb.folder.created == ["Important"]  # created on the fly
-    assert ("42", "Important") in mb.moved
+    assert mb.moved == [(["9", "10"], "Important")]
 
 
-def test_move_does_not_recreate_existing_folder():
+def test_move_to_important_existing_folder_not_recreated():
     mb = _FakeMailbox(existing=["Important"])
-    mc = _client_with_mailbox(mb)
-    mc.moveToFolder("42", "Important", "icloud")
-    assert mb.folder.created == []  # already there
-    assert ("42", "Important") in mb.moved
+    mc = _client({"icloud": mb})
+    mc.moveToImportant([{"uid": "9", "account": "icloud"}])
+    assert mb.folder.created == []
+    assert mb.moved == [(["9"], "Important")]

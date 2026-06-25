@@ -24,6 +24,9 @@ ACCOUNT_FOLDERS = {
     "icloud": {"trash": "Trash", "drafts": "Drafts", "archive": "Archive"},
 }
 
+# The curated priority folder (same name across accounts). Created on first use.
+IMPORTANT_FOLDER = "Important"
+
 
 @dataclass
 class ImapAccount:
@@ -239,14 +242,33 @@ class MailClient:
     # Mutating actions
     # ------------------------------------------------------------------
 
-    def moveToFolder(self, email_uid: str, folder: str, account: str) -> str:
-        """Move an email to a folder within the given account, creating it if needed."""
-        target = self._account(account)
-        with self._mailbox(target) as mailbox:
-            if not mailbox.folder.exists(folder):
-                mailbox.folder.create(folder)
-            mailbox.move(email_uid, folder)
-        return f"Moved email {email_uid} to {folder} in {account}."
+    def _move_batch(self, items: list[dict], folder_for) -> int:
+        """Move a batch of {uid, account} emails. `folder_for(account_label)` gives the
+        destination folder for each account; it's created if missing. Returns the count."""
+        self._require_accounts()
+        by_account: dict[str, list[str]] = {}
+        for item in items:
+            by_account.setdefault(item["account"], []).append(str(item["uid"]))
+        moved = 0
+        for label, uids in by_account.items():
+            account = self._account(label)
+            folder = folder_for(account.label)
+            with self._mailbox(account) as mailbox:
+                if not mailbox.folder.exists(folder):
+                    mailbox.folder.create(folder)
+                mailbox.move(uids, folder)
+            moved += len(uids)
+        return moved
+
+    def archiveEmails(self, items: list[dict]) -> str:
+        """Archive a batch of {uid, account} emails (move to each account's archive)."""
+        n = self._move_batch(items, lambda label: self._special_folder(label, "archive"))
+        return f"Archived {n} email(s)."
+
+    def moveToImportant(self, items: list[dict]) -> str:
+        """Move a batch of {uid, account} emails into the 'Important' folder."""
+        n = self._move_batch(items, lambda label: IMPORTANT_FOLDER)
+        return f"Moved {n} email(s) to Important."
 
     def deleteEmail(self, email_uid: str, account: str) -> str:
         """Move an email to Trash (reversible) in the given account."""
@@ -255,14 +277,6 @@ class MailClient:
         with self._mailbox(target) as mailbox:
             mailbox.move(email_uid, trash)
         return f"Moved email {email_uid} to Trash in {account}."
-
-    def archiveEmail(self, email_uid: str, account: str) -> str:
-        """Move an email to the account's archive folder."""
-        target = self._account(account)
-        archive = self._special_folder(target.label, "archive")
-        with self._mailbox(target) as mailbox:
-            mailbox.move(email_uid, archive)
-        return f"Archived email {email_uid} in {account}."
 
     def markRead(self, email_uid: str, account: str, read: bool = True) -> str:
         """Mark an email read (read=True) or unread (read=False)."""
