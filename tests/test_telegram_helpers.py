@@ -4,7 +4,12 @@ These run without a bot or network. They guard the callback_data round-trip
 (buttons are useless if encode/decode disagree) and the 64-byte Telegram limit.
 """
 
-from frontends.telegram.client import mail_cb, parse_mail_cb, parse_hhmm
+from frontends.telegram.client import (
+    mail_cb,
+    parse_hhmm,
+    parse_interval,
+    parse_mail_cb,
+)
 
 
 def test_mail_cb_round_trip():
@@ -26,3 +31,16 @@ def test_parse_hhmm_valid():
 def test_parse_hhmm_invalid():
     for bad in ("8", "25:00", "12:60", "ab:cd", "", "08-00"):
         assert parse_hhmm(bad) is None
+
+
+def test_parse_interval_valid():
+    assert parse_interval("45s") == 45
+    assert parse_interval("30m") == 1800
+    assert parse_interval("2h") == 7200
+    assert parse_interval("1d") == 86400
+    assert parse_interval("2H") == 7200  # case-insensitive
+
+
+def test_parse_interval_invalid():
+    for bad in ("30", "m", "0m", "-5m", "1w", "abc", "", "1.5h"):
+        assert parse_interval(bad) is None

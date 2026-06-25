@@ -25,13 +25,15 @@ from telegram.ext import (
 )
 
 from core.agent_service import AgentService
-from core.tasks import digest_task, run_task
+from core.tasks import run_digest, run_heartbeat
 from frontends.telegram.outbound import TelegramOutbound, send_markdown
 
 load_dotenv()
 INBOX_CARD_LIMIT = 10
 DEFAULT_DIGEST_TIME = "08:00"
 DEFAULT_TIMEZONE = "America/Denver"
+
+_INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 # --- pure callback_data helpers (kept tiny + testable) ---
@@ -56,6 +58,20 @@ def parse_hhmm(value: str) -> str | None:
     if 0 <= hour < 24 and 0 <= minute < 60:
         return f"{hour:02d}:{minute:02d}"
     return None
+
+
+def parse_interval(value: str) -> int | None:
+    """Parse an interval like '30m', '2h', '45s', '1d' into seconds (None if invalid)."""
+    value = (value or "").strip().lower()
+    if len(value) < 2 or value[-1] not in _INTERVAL_UNITS:
+        return None
+    try:
+        n = int(value[:-1])
+    except ValueError:
+        return None
+    if n <= 0:
+        return None
+    return n * _INTERVAL_UNITS[value[-1]]
 
 
 class TelegramFrontend:
@@ -105,7 +121,8 @@ class TelegramFrontend:
             "Commands:\n"
             "/inbox – unread emails with tap-to-act buttons\n"
             "/fetchemails – a triaged summary of your latest emails\n"
-            "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n",
+            "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n"
+            "/heartbeat – view/set a recurring check-in (e.g. /heartbeat 30m, /heartbeat off)\n",
             parse_mode="HTML",
         )
 
@@ -274,15 +291,73 @@ class TelegramFrontend:
         )
         self.logger.info("Digest scheduled for %02d:%02d %s", hour, minute, self.tz_name)
 
-    # The digest's run+deliver half goes through the channel-neutral core.tasks
-    # seam — a future scheduler reuses run_task with its own OutboundChannel. Only
-    # the scheduling/config (/digest, _reschedule_digest, JobQueue) stays here.
+    # The run+deliver half goes through the channel-neutral core.tasks seam; only the
+    # scheduling/config stays here. The *instructions* live in the editable Agent/
+    # runbook files (read at run time), so the agent/user can change what they do.
     async def _digest_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
+            instructions = self.agent.agent_dir.read_runbook("digest")
             outbound = TelegramOutbound(context.bot, self.me_id)
-            await run_task(self.agent, digest_task(str(self.me_id)), outbound)
+            await run_digest(self.agent, instructions, outbound)
         except Exception:
             self.logger.error("Digest job failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Heartbeat (JobQueue, runs on an interval; only pings if noteworthy)
+    # ------------------------------------------------------------------
+
+    async def heartbeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        bot_data = context.application.bot_data
+        if not context.args:
+            enabled = bot_data.get("heartbeat_enabled", False)
+            every = bot_data.get("heartbeat_interval_label", "—")
+            status = f"on, every {every}" if enabled else "off"
+            await update.message.reply_text(
+                f"Heartbeat is <b>{status}</b>. It runs your <code>heartbeat.md</code> "
+                "instructions on an interval and only messages you if something needs "
+                "attention.\nUse <code>/heartbeat 30m</code> (s/m/h/d), or "
+                "<code>/heartbeat off</code>.",
+                parse_mode="HTML",
+            )
+            return
+        arg = context.args[0].strip().lower()
+        if arg == "off":
+            bot_data["heartbeat_enabled"] = False
+            self._reschedule_heartbeat(context.application)
+            await update.message.reply_text("Heartbeat turned off.")
+            return
+        seconds = parse_interval(arg)
+        if not seconds:
+            await update.message.reply_text(
+                "Usage: /heartbeat <interval> like 30m, 2h, 45s, 1d — or /heartbeat off"
+            )
+            return
+        bot_data["heartbeat_enabled"] = True
+        bot_data["heartbeat_interval"] = seconds
+        bot_data["heartbeat_interval_label"] = arg
+        self._reschedule_heartbeat(context.application)
+        await update.message.reply_text(f"Heartbeat set to run every {arg}.")
+
+    def _reschedule_heartbeat(self, app: Application) -> None:
+        for job in app.job_queue.get_jobs_by_name("heartbeat"):
+            job.schedule_removal()
+        if not app.bot_data.get("heartbeat_enabled", False):
+            return
+        seconds = app.bot_data.get("heartbeat_interval")
+        if not seconds:
+            return
+        app.job_queue.run_repeating(
+            self._heartbeat_job, interval=seconds, first=seconds, name="heartbeat"
+        )
+        self.logger.info("Heartbeat scheduled every %ss", seconds)
+
+    async def _heartbeat_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            instructions = self.agent.agent_dir.read_runbook("heartbeat")
+            outbound = TelegramOutbound(context.bot, self.me_id)
+            await run_heartbeat(self.agent, instructions, outbound)
+        except Exception:
+            self.logger.error("Heartbeat job failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -303,10 +378,13 @@ class TelegramFrontend:
             BotCommand("inbox", "Unread emails with action buttons"),
             BotCommand("fetchemails", "Triaged summary of latest emails"),
             BotCommand("digest", "View/set the morning digest"),
+            BotCommand("heartbeat", "View/set the recurring heartbeat"),
         ])
         app.bot_data.setdefault("digest_enabled", True)
         app.bot_data.setdefault("digest_time", DEFAULT_DIGEST_TIME)
+        app.bot_data.setdefault("heartbeat_enabled", False)
         self._reschedule_digest(app)
+        self._reschedule_heartbeat(app)
 
     def run(self) -> None:
         self.logger.info("Starting Telegram Bot...")
@@ -327,6 +405,7 @@ class TelegramFrontend:
         app.add_handler(CommandHandler("inbox", self.inbox, filters=user_filter))
         app.add_handler(CommandHandler("fetchemails", self.fetchEmails, filters=user_filter))
         app.add_handler(CommandHandler("digest", self.digest, filters=user_filter))
+        app.add_handler(CommandHandler("heartbeat", self.heartbeat, filters=user_filter))
         app.add_handler(CallbackQueryHandler(self._on_mail_callback, pattern="^mail:"))
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, self.textMessage)
