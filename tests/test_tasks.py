@@ -5,10 +5,19 @@ import asyncio
 from core.tasks import HEARTBEAT_SENTINEL, run_digest, run_heartbeat
 
 
+class FakeAgentDir:
+    def __init__(self):
+        self.logged = None  # (output, delivered)
+
+    def write_heartbeat_log(self, output, delivered):
+        self.logged = (output, delivered)
+
+
 class FakeAgent:
     def __init__(self, reply):
         self.reply = reply
         self.prompt = None
+        self.agent_dir = FakeAgentDir()
 
     async def run_isolated(self, prompt):
         self.prompt = prompt
@@ -37,6 +46,15 @@ def test_heartbeat_delivers_when_noteworthy():
     assert delivered == "Urgent: your manager needs a reply by 3pm."  # reported to caller
     # the sentinel directive was appended to the instructions
     assert HEARTBEAT_SENTINEL in agent.prompt
+    # and the run was logged as delivered
+    assert agent.agent_dir.logged == ("Urgent: your manager needs a reply by 3pm.", True)
+
+
+def test_heartbeat_logs_suppressed_run():
+    agent = FakeAgent(HEARTBEAT_SENTINEL)
+    asyncio.run(run_heartbeat(agent, "check things", FakeOutbound()))
+    # even a quiet run is logged (overwriting the previous), marked not-delivered
+    assert agent.agent_dir.logged == (HEARTBEAT_SENTINEL, False)
 
 
 def test_heartbeat_silent_on_sentinel():

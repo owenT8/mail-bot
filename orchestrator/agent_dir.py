@@ -14,18 +14,26 @@ defaults on first read). The memory and skills stores are constructed from
 fenced from the NoteTaker (see notes_client RESERVED_DIRS).
 """
 
+import os
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from orchestrator.constants import (
     DEFAULT_DIGEST_INSTRUCTIONS,
     DEFAULT_HEARTBEAT_INSTRUCTIONS,
 )
+from orchestrator.time_context import DEFAULT_TIMEZONE
 
 # Editable scheduled-task instruction files and their seed contents.
 RUNBOOK_DEFAULTS = {
     "digest": DEFAULT_DIGEST_INSTRUCTIONS,
     "heartbeat": DEFAULT_HEARTBEAT_INSTRUCTIONS,
 }
+
+# A single-run log of the most recent heartbeat (overwritten each run, never a
+# running list), kept in the Agent folder so it's visible in Obsidian.
+HEARTBEAT_LOG_FILE = "heartbeat.last.md"
 
 
 class AgentDir:
@@ -54,6 +62,26 @@ class AgentDir:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(instructions, encoding="utf-8")
         return f"Updated the {name} instructions (takes effect on the next run)."
+
+    # --- last-heartbeat log (overwritten every run; only the most recent kept) ---
+
+    @property
+    def heartbeat_log_path(self) -> Path:
+        return self.base / HEARTBEAT_LOG_FILE
+
+    def read_heartbeat_log(self) -> str:
+        p = self.heartbeat_log_path
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def write_heartbeat_log(self, output: str, delivered: bool) -> None:
+        """Record what the latest heartbeat did, replacing any prior entry."""
+        tz = ZoneInfo(os.getenv("TIMEZONE", DEFAULT_TIMEZONE))
+        when = datetime.now(tz).strftime("%Y-%m-%d %H:%M %Z")
+        outcome = "delivered a message" if delivered else "nothing noteworthy"
+        body = output.strip() if delivered else "Nothing needed Owen's attention."
+        text = f"# Last heartbeat\n\n- Ran: {when}\n- Outcome: {outcome}\n\n{body}\n"
+        self.base.mkdir(parents=True, exist_ok=True)
+        self.heartbeat_log_path.write_text(text, encoding="utf-8")
 
 
 def make_runbook_tools(agent_dir: AgentDir) -> list:

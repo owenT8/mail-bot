@@ -40,10 +40,12 @@ async def run_heartbeat(
     """Run the heartbeat instructions; deliver ONLY if there's something noteworthy.
 
     Returns the delivered text, or None if the run was suppressed (nothing to report)
-    — so callers can log/report the outcome.
+    — so callers can log/report the outcome. Either way, it records what this run did
+    to the Agent/heartbeat.last.md log (overwriting the previous run).
     """
     text = (await agent.run_isolated(instructions + _HEARTBEAT_DIRECTIVE) or "").strip()
-    if text and HEARTBEAT_SENTINEL not in text.upper():
+    delivered = bool(text) and HEARTBEAT_SENTINEL not in text.upper()
+    if delivered:
         await deliver.push(text)
-        return text
-    return None
+    agent.agent_dir.write_heartbeat_log(text, delivered)
+    return text if delivered else None
