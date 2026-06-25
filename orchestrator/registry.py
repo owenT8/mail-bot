@@ -14,18 +14,20 @@ from google.adk.agents.llm_agent import Agent
 
 from orchestrator.agents.calendar_agent.calendar_agent import build_calendar_agent
 from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_agent
-from orchestrator.agents.memory_agent.memory_agent import build_memory_agent
-from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.agents.notetaker_agent.notetaker_agent import build_notetaker_agent
 from orchestrator.agents.search_agent import build_search_agent
 from orchestrator.agents.writer_agent import build_writer_agent
+from orchestrator.memory.store import FileMemoryStore
 
 
 @dataclass
 class AgentContext:
     """Shared services handed to specialist builders."""
 
-    memory_service: ChromaMemoryService
+    # The file-based memory store. Memory is not a routed specialist; the store is
+    # wired into the orchestrator directly (see agent.py). It's carried here too in
+    # case a specialist ever needs read access — current builders ignore it.
+    memory_store: FileMemoryStore
 
 
 @dataclass(frozen=True)
@@ -69,17 +71,12 @@ SPECIALISTS: list[Specialist] = [
         ),
         build=lambda ctx: build_calendar_agent(),
     ),
-    Specialist(
-        name="MemoryAgent",
-        when_to_use=(
-            "Use whenever the user asks you to remember, recall, or forget "
-            "something about themselves, their preferences, or ongoing context. "
-            "Also delegate to it when a request would benefit from prior context "
-            '(e.g. "what was I working on?", "what did I tell you about my '
-            'interview?").'
-        ),
-        build=lambda ctx: build_memory_agent(ctx.memory_service),
-    ),
+    # NOTE: there is intentionally no MemoryAgent. Memory is not a routed specialist
+    # — it's a substrate. Recall is ambient (the memory index is injected into the
+    # orchestrator's global_instruction every turn) and writes happen automatically
+    # at compaction; explicit remember/recall/forget are plain tools on the
+    # orchestrator (see agent.py + orchestrator/memory/tools.py). Do NOT re-add a
+    # Specialist entry here.
     Specialist(
         name="WriterAgent",
         when_to_use=(

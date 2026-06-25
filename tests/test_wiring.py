@@ -12,15 +12,36 @@ import tempfile
 import pytest
 
 from orchestrator.agent import build_root_agent
-from orchestrator.agents.memory_agent.memory_service import ChromaMemoryService
 from orchestrator.constants import MODEL, SUBAGENT_MODEL
+from orchestrator.memory.store import FileMemoryStore
 from orchestrator.registry import SPECIALISTS, render_team
+
+# Memory is no longer a specialist (gone from SPECIALISTS), so the specialist-wiring
+# tests below don't cover it; FileMemoryStore behavior is tested in
+# tests/test_memory_store.py, and memory-tool/index wiring is asserted here.
 
 
 @pytest.fixture(scope="module")
 def root_agent():
-    mem = ChromaMemoryService(path=tempfile.mkdtemp(prefix="mailbot_test_"))
-    return build_root_agent(mem)
+    store = FileMemoryStore(tempfile.mkdtemp(prefix="mailbot_mem_"))
+    return build_root_agent(store)
+
+
+def test_memory_tools_wired_on_orchestrator(root_agent):
+    # Memory is handled directly by the orchestrator, not a specialist: the plain
+    # tools must be present alongside the specialist AgentTools.
+    names = {getattr(t, "__name__", None) or getattr(t, "name", None) for t in root_agent.tools}
+    for tool in ("recall_memory", "read_memory", "save_memory", "forget_memory"):
+        assert tool in names, f"{tool} not wired onto the orchestrator"
+
+
+def test_orchestrator_injects_memory_index(root_agent):
+    # global_instruction is a provider that injects the memory index for ambient recall.
+    class _Ctx:  # minimal stand-in exposing .state (datetime provider ignores the rest)
+        state = {}
+
+    text = root_agent.global_instruction(_Ctx())
+    assert "<known_about_owen>" in text
 
 
 def test_specialists_are_call_and_return_tools(root_agent):
@@ -82,5 +103,5 @@ def test_model_split(root_agent):
     # Composition/reasoning agents need the capable model.
     assert by_name["WriterAgent"].model == MODEL
     assert by_name["NoteTakerAgent"].model == MODEL
-    for name in ("MessagingAgent", "CalendarAgent", "MemoryAgent", "ResearchAgent"):
+    for name in ("MessagingAgent", "CalendarAgent", "ResearchAgent"):
         assert by_name[name].model == SUBAGENT_MODEL, f"{name} not on SUBAGENT_MODEL"
