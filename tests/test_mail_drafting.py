@@ -47,7 +47,7 @@ def test_build_message_reply_sets_threading_headers():
     assert msg["References"] == "<abc123@mail.example.com>"
 
 
-# --- archive_emails / move_to_important: batch, group by account, auto-create folder ---
+# --- archive_emails / move_to_important: batch, read/unread, verified inbox removal ---
 
 class _FakeFolderMgr:
     def __init__(self, existing):
@@ -63,11 +63,15 @@ class _FakeFolderMgr:
 
 
 class _FakeMailbox:
-    def __init__(self, existing, still_after_move=()):
-        self.folder = _FakeFolderMgr(existing)
-        self.moved = []  # list of (uids, folder)
-        # uids that remain in the inbox after a move (simulates a silent no-op)
-        self._still = {str(u) for u in still_after_move}
+    """Models an INBOX: move() removes uids from the inbox unless the destination is
+    a 'sticky' folder (simulating Gmail's Important label, which doesn't drop \\Inbox)."""
+
+    def __init__(self, existing_folders=(), inbox_uids=(), sticky_folders=()):
+        self.folder = _FakeFolderMgr(existing_folders)
+        self.inbox = {str(u) for u in inbox_uids}
+        self.sticky_folders = set(sticky_folders)
+        self.moves = []  # (uids, folder)
+        self.flags = []  # (uids, flag, value)
 
     def __enter__(self):
         return self
@@ -75,12 +79,17 @@ class _FakeMailbox:
     def __exit__(self, *a):
         return False
 
-    def move(self, uids, folder):
-        self.moved.append((uids, folder))
+    def flag(self, uids, flag, value):
+        self.flags.append(([str(u) for u in uids], flag, value))
 
-    def fetch(self, criteria=None, mark_seen=False, **kw):
-        # the move-verification re-fetches the uids; report any "still present"
-        return [types.SimpleNamespace(uid=u) for u in self._still]
+    def move(self, uids, folder):
+        uids = [str(u) for u in uids]
+        self.moves.append((uids, folder))
+        if folder not in self.sticky_folders:
+            self.inbox -= set(uids)
+
+    def uids(self, criteria="ALL"):
+        return list(self.inbox)
 
 
 def _client(mailboxes_by_label):
@@ -91,71 +100,64 @@ def _client(mailboxes_by_label):
     return mc
 
 
-def test_archive_batches_by_account():
-    gmail = _FakeMailbox(existing=["[Gmail]/All Mail"])
-    icloud = _FakeMailbox(existing=["Archive"])
+def test_archive_batches_by_account_and_marks_read():
+    gmail = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["1", "2"])
+    icloud = _FakeMailbox(["Archive"], inbox_uids=["3"])
     mc = _client({"gmail": gmail, "icloud": icloud})
-    mc.archiveEmails([
+    out = mc.archiveEmails([
         {"uid": "1", "account": "gmail"},
         {"uid": "2", "account": "gmail"},
         {"uid": "3", "account": "icloud"},
     ])
-    assert gmail.moved == [(["1", "2"], "[Gmail]/All Mail")]  # one move per account
-    assert icloud.moved == [(["3"], "Archive")]
-    assert gmail.folder.created == [] and icloud.folder.created == []  # archives exist
+    assert gmail.moves == [(["1", "2"], "[Gmail]/All Mail")]  # one move per account
+    assert icloud.moves == [(["3"], "Archive")]
+    assert gmail.inbox == set() and icloud.inbox == set()  # left the inbox
+    assert all(value is True for (_, _, value) in gmail.flags + icloud.flags)  # marked read
+    assert "Archived 3 email" in out and "did not" not in out
 
 
-def test_move_to_important_creates_folder_once():
-    mb = _FakeMailbox(existing=["INBOX"])
+def test_important_icloud_creates_folder_and_marks_unread():
+    mb = _FakeMailbox(existing_folders=[], inbox_uids=["9", "10"])
     mc = _client({"icloud": mb})
     mc.moveToImportant([
         {"uid": "9", "account": "icloud"},
         {"uid": "10", "account": "icloud"},
     ])
     assert mb.folder.created == ["Important"]  # created on the fly
-    assert mb.moved == [(["9", "10"], "Important")]
+    assert mb.moves == [(["9", "10"], "Important")]
+    assert mb.inbox == set()
+    assert all(value is False for (_, _, value) in mb.flags)  # marked UNREAD
 
 
-def test_move_to_important_existing_folder_not_recreated():
-    mb = _FakeMailbox(existing=["Important"])
-    mc = _client({"icloud": mb})
-    mc.moveToImportant([{"uid": "9", "account": "icloud"}])
-    assert mb.folder.created == []
-    assert mb.moved == [(["9"], "Important")]
-
-
-def test_move_to_important_gmail_targets_system_folder_and_tolerates_create_error():
-    # Gmail reserves "Important" (it's [Gmail]/Important). We target that folder and,
-    # even if exists() misfires and create() is rejected, the move still proceeds.
-    gmail = _FakeMailbox(existing=[])
-
-    def reject_create(name):
-        raise RuntimeError("reserved name")
-
-    gmail.folder.create = reject_create
+def test_important_gmail_archives_to_leave_inbox():
+    # Gmail's Important is a sticky label (move doesn't drop \Inbox); we then archive
+    # the stuck message to All Mail so it actually leaves the inbox.
+    gmail = _FakeMailbox(
+        existing_folders=["[Gmail]/All Mail"],
+        inbox_uids=["5"],
+        sticky_folders={"[Gmail]/Important"},
+    )
     mc = _client({"gmail": gmail})
     out = mc.moveToImportant([{"uid": "5", "account": "gmail"}])
-    assert gmail.moved == [(["5"], "[Gmail]/Important")]  # moved despite create failure
-    assert "Moved to Important" in out
+    assert (["5"], "[Gmail]/Important") in gmail.moves  # labeled important
+    assert (["5"], "[Gmail]/All Mail") in gmail.moves   # then archived to leave inbox
+    assert gmail.inbox == set()
+    assert "Moved to Important: 1 email" in out and "did not" not in out
 
 
-def test_archive_never_creates_system_folder():
-    # Archive must NOT attempt to create the (always-present) system archive folder,
-    # which Gmail would reject for [Gmail]/All Mail.
-    gmail = _FakeMailbox(existing=[])  # exists() would be False, but create must not run
-
-    def fail_create(name):
-        raise AssertionError("archive should never create a folder")
-
-    gmail.folder.create = fail_create
-    mc = _client({"gmail": gmail})
-    mc.archiveEmails([{"uid": "1", "account": "gmail"}])
-    assert gmail.moved == [(["1"], "[Gmail]/All Mail")]
+def test_organize_detects_silent_no_op():
+    # The move is accepted but the message stays in the inbox (the iCloud symptom).
+    # Verification via uids() catches it instead of falsely reporting success.
+    mb = _FakeMailbox(["Archive"], inbox_uids=["1"], sticky_folders={"Archive"})
+    mc = _client({"icloud": mb})
+    out = mc.archiveEmails([{"uid": "1", "account": "icloud"}])
+    assert "Archived 0 email" in out
+    assert "did not leave the inbox" in out and "icloud:" in out
 
 
-def test_move_reports_per_account_failure_without_aborting():
-    good = _FakeMailbox(existing=["Archive"])
-    bad = _FakeMailbox(existing=["[Gmail]/All Mail"])
+def test_organize_reports_per_account_failure_without_aborting():
+    good = _FakeMailbox(["Archive"], inbox_uids=["1"])
+    bad = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["2"])
 
     def boom(uids, folder):
         raise RuntimeError("imap error")
@@ -166,16 +168,6 @@ def test_move_reports_per_account_failure_without_aborting():
         {"uid": "1", "account": "icloud"},
         {"uid": "2", "account": "gmail"},
     ])
-    assert good.moved == [(["1"], "Archive")]  # the healthy account still ran
+    assert good.inbox == set()  # the healthy account still ran
     assert "Archived 1 email" in out
     assert "gmail:" in out and "imap error" in out  # the failure is surfaced
-
-
-def test_move_detects_silent_no_op():
-    # The server accepts the move but the message stays in the inbox (the iCloud
-    # symptom). Verification catches it instead of falsely reporting success.
-    mb = _FakeMailbox(existing=["Archive"], still_after_move=["1"])
-    mc = _client({"icloud": mb})
-    out = mc.archiveEmails([{"uid": "1", "account": "icloud"}])
-    assert "Archived 0 email" in out
-    assert "did not move" in out and "icloud:" in out
