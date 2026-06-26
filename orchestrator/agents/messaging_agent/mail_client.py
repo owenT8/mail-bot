@@ -18,14 +18,24 @@ MAX_BODY_CHARS = 2000
 GMAIL_HOST = "imap.gmail.com"
 ICLOUD_HOST = "imap.mail.me.com"
 
-# Per-account special folders (display names differ between providers).
+# Per-account special folders (display names differ between providers). "important"
+# is the curated priority destination: Gmail reserves the name "Important" (it's the
+# system [Gmail]/Important folder), so we target that there; iCloud uses a plain
+# "Important" folder, created on first use.
 ACCOUNT_FOLDERS = {
-    "gmail": {"trash": "[Gmail]/Trash", "drafts": "[Gmail]/Drafts", "archive": "[Gmail]/All Mail"},
-    "icloud": {"trash": "Trash", "drafts": "Drafts", "archive": "Archive"},
+    "gmail": {
+        "trash": "[Gmail]/Trash",
+        "drafts": "[Gmail]/Drafts",
+        "archive": "[Gmail]/All Mail",
+        "important": "[Gmail]/Important",
+    },
+    "icloud": {
+        "trash": "Trash",
+        "drafts": "Drafts",
+        "archive": "Archive",
+        "important": "Important",
+    },
 }
-
-# The curated priority folder (same name across accounts). Created on first use.
-IMPORTANT_FOLDER = "Important"
 
 
 @dataclass
@@ -242,33 +252,69 @@ class MailClient:
     # Mutating actions
     # ------------------------------------------------------------------
 
-    def _move_batch(self, items: list[dict], folder_for) -> int:
-        """Move a batch of {uid, account} emails. `folder_for(account_label)` gives the
-        destination folder for each account; it's created if missing. Returns the count."""
+    def _move_batch(
+        self, items: list[dict], kind: str, create_if_missing: bool = False
+    ) -> tuple[int, list[str]]:
+        """Move a batch of {uid, account} emails to each account's `kind` folder.
+
+        Groups by account so each mailbox is opened once. Per-provider folder names
+        come from _special_folder. `create_if_missing` only applies to non-system
+        destinations (the iCloud "Important" folder); creation is best-effort so a
+        provider that reserves the name (e.g. Gmail's [Gmail]/Important) doesn't break
+        the move. Failures are captured per account rather than aborting the batch.
+
+        Returns (count_moved, errors) where errors are human-readable per-account notes.
+        """
         self._require_accounts()
         by_account: dict[str, list[str]] = {}
         for item in items:
             by_account.setdefault(item["account"], []).append(str(item["uid"]))
+
         moved = 0
+        errors: list[str] = []
         for label, uids in by_account.items():
             account = self._account(label)
-            folder = folder_for(account.label)
-            with self._mailbox(account) as mailbox:
-                if not mailbox.folder.exists(folder):
-                    mailbox.folder.create(folder)
-                mailbox.move(uids, folder)
-            moved += len(uids)
-        return moved
+            folder = self._special_folder(label, kind)
+            try:
+                with self._mailbox(account) as mailbox:
+                    if create_if_missing and not mailbox.folder.exists(folder):
+                        try:
+                            mailbox.folder.create(folder)
+                        except Exception as e:
+                            # e.g. Gmail rejects creating a reserved name — the folder
+                            # likely already exists server-side; proceed to the move.
+                            logger.info(
+                                "Skipped creating folder %r in %s: %s", folder, label, e
+                            )
+                    mailbox.move(uids, folder)
+                moved += len(uids)
+                logger.info(
+                    "Moved %d email(s) to %r in %s", len(uids), folder, label
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to move %d email(s) to %r in %s: %s",
+                    len(uids), folder, label, e, exc_info=True,
+                )
+                errors.append(f"{label}: {e}")
+        return moved, errors
+
+    @staticmethod
+    def _move_summary(verb: str, moved: int, errors: list[str]) -> str:
+        msg = f"{verb} {moved} email(s)."
+        if errors:
+            msg += " Some accounts failed — " + "; ".join(errors)
+        return msg
 
     def archiveEmails(self, items: list[dict]) -> str:
-        """Archive a batch of {uid, account} emails (move to each account's archive)."""
-        n = self._move_batch(items, lambda label: self._special_folder(label, "archive"))
-        return f"Archived {n} email(s)."
+        """Archive a batch of {uid, account} emails (to each account's archive folder)."""
+        moved, errors = self._move_batch(items, "archive")
+        return self._move_summary("Archived", moved, errors)
 
     def moveToImportant(self, items: list[dict]) -> str:
-        """Move a batch of {uid, account} emails into the 'Important' folder."""
-        n = self._move_batch(items, lambda label: IMPORTANT_FOLDER)
-        return f"Moved {n} email(s) to Important."
+        """Move a batch of {uid, account} emails into the per-account Important folder."""
+        moved, errors = self._move_batch(items, "important", create_if_missing=True)
+        return self._move_summary("Moved to Important:", moved, errors)
 
     def deleteEmail(self, email_uid: str, account: str) -> str:
         """Move an email to Trash (reversible) in the given account."""
