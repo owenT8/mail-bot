@@ -287,10 +287,20 @@ class MailClient:
                                 "Skipped creating folder %r in %s: %s", folder, label, e
                             )
                     mailbox.move(uids, folder)
-                moved += len(uids)
+                    # Verify: some servers accept the command but move nothing (e.g.
+                    # UIDs that don't match, or a destination they silently reject). Any
+                    # uid still in the inbox after the move did NOT move.
+                    still_in_inbox = self._uids_present(mailbox, uids)
+                moved_here = len(uids) - len(still_in_inbox)
+                moved += moved_here
                 logger.info(
-                    "Moved %d email(s) to %r in %s", len(uids), folder, label
+                    "Moved %d/%d email(s) to %r in %s", moved_here, len(uids), folder, label
                 )
+                if still_in_inbox:
+                    errors.append(
+                        f"{label}: {len(still_in_inbox)} of {len(uids)} did not move "
+                        f"to {folder!r}"
+                    )
             except Exception as e:
                 logger.error(
                     "Failed to move %d email(s) to %r in %s: %s",
@@ -298,6 +308,19 @@ class MailClient:
                 )
                 errors.append(f"{label}: {e}")
         return moved, errors
+
+    @staticmethod
+    def _uids_present(mailbox, uids: list[str]) -> set[str]:
+        """Which of `uids` are still in the (currently selected, INBOX) mailbox.
+
+        Best-effort verification of a move — if the check itself can't run, return
+        empty (assume the move succeeded) rather than report a false failure.
+        """
+        try:
+            found = mailbox.fetch(f'UID {",".join(uids)}', mark_seen=False)
+            return {m.uid for m in found} & set(uids)
+        except Exception:
+            return set()
 
     @staticmethod
     def _move_summary(verb: str, moved: int, errors: list[str]) -> str:

@@ -63,9 +63,11 @@ class _FakeFolderMgr:
 
 
 class _FakeMailbox:
-    def __init__(self, existing):
+    def __init__(self, existing, still_after_move=()):
         self.folder = _FakeFolderMgr(existing)
         self.moved = []  # list of (uids, folder)
+        # uids that remain in the inbox after a move (simulates a silent no-op)
+        self._still = {str(u) for u in still_after_move}
 
     def __enter__(self):
         return self
@@ -75,6 +77,10 @@ class _FakeMailbox:
 
     def move(self, uids, folder):
         self.moved.append((uids, folder))
+
+    def fetch(self, criteria=None, mark_seen=False, **kw):
+        # the move-verification re-fetches the uids; report any "still present"
+        return [types.SimpleNamespace(uid=u) for u in self._still]
 
 
 def _client(mailboxes_by_label):
@@ -163,3 +169,13 @@ def test_move_reports_per_account_failure_without_aborting():
     assert good.moved == [(["1"], "Archive")]  # the healthy account still ran
     assert "Archived 1 email" in out
     assert "gmail:" in out and "imap error" in out  # the failure is surfaced
+
+
+def test_move_detects_silent_no_op():
+    # The server accepts the move but the message stays in the inbox (the iCloud
+    # symptom). Verification catches it instead of falsely reporting success.
+    mb = _FakeMailbox(existing=["Archive"], still_after_move=["1"])
+    mc = _client({"icloud": mb})
+    out = mc.archiveEmails([{"uid": "1", "account": "icloud"}])
+    assert "Archived 0 email" in out
+    assert "did not move" in out and "icloud:" in out
