@@ -96,20 +96,29 @@ def build_messaging_agent() -> Agent:
         """List folder names per mailbox. account "" lists all; or "gmail"/"icloud"."""
         return await asyncio.to_thread(client.listFolders, account or None)
 
-    async def move_email_to_folder(
-        email_uid: str, folder: str, account: str
-    ) -> str:
-        """Move an email to a folder (for example, to archive it).
+    async def archive_emails(emails: list[dict]) -> str:
+        """Archive one or more emails (move them out of the inbox to the Archive).
+        Pre-authorized — do it immediately, no confirmation needed. Takes a LIST so you
+        can archive several at once in a single action.
 
         Args:
-            email_uid: The uid of the email, from get_unread_emails/search.
-            folder: Destination folder. Gmail archive is "[Gmail]/All Mail";
-                iCloud archive is "Archive". Use list_folders if unsure.
-            account: Which mailbox the email is in ("gmail" or "icloud").
+            emails: a list of emails to archive, each a dict
+                {"uid": <email uid>, "account": "gmail" | "icloud"} — exactly as
+                returned by get_unread_emails / search_emails.
         """
-        return await asyncio.to_thread(
-            client.moveToFolder, email_uid, folder, account
-        )
+        return await asyncio.to_thread(client.archiveEmails, emails)
+
+    async def move_to_important(emails: list[dict]) -> str:
+        """Move one or more emails into the "Important" folder (the user's curated
+        priority folder, created automatically if it doesn't exist yet). Pre-authorized
+        — do it immediately, no confirmation needed. Takes a LIST so you can move several
+        at once.
+
+        Args:
+            emails: a list of emails to move, each a dict
+                {"uid": <email uid>, "account": "gmail" | "icloud"}.
+        """
+        return await asyncio.to_thread(client.moveToImportant, emails)
 
     async def delete_email(email_uid: str, account: str) -> str:
         """Move an email to Trash (reversible) in the given mailbox.
@@ -196,7 +205,8 @@ def build_messaging_agent() -> Agent:
             get_email,
             read_attachment,
             list_folders,
-            move_email_to_folder,
+            archive_emails,
+            move_to_important,
             delete_email,
             mark_email_read,
             flag_email,

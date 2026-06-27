@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 from pathlib import Path
 
 from google.adk.runners import Runner
@@ -7,15 +8,24 @@ from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
 from orchestrator.agent import build_root_agent
+from orchestrator.agent_dir import AgentDir
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 from orchestrator.memory.extractor import MemoryExtractor
 from orchestrator.memory.store import FileMemoryStore
+from orchestrator.skills.store import SkillStore
 
 APP_NAME = "Trail-Guide"
 
-# The memory web lives under the user's Notes vault (same NOTES_DIR the NoteTaker
-# uses) so it's all one Obsidian vault. Memory notes go in <NOTES_DIR>/memory.
+# The agent's self-config folder lives under the user's Notes vault (same NOTES_DIR
+# the NoteTaker uses) so it's all one Obsidian vault: <NOTES_DIR>/Agent holds
+# memory/, skills/, and the heartbeat/digest runbooks.
 DEFAULT_NOTES_DIR = "~/my-stuff/Notes"
+AGENT_DIR_NAME = "Agent"
+
+# Scheduled/autonomous tasks (digest, heartbeat) run under this pseudo-user in a
+# fresh throwaway session, so they never pollute the real conversation or trigger
+# its compaction. See run_isolated().
+TASK_USER_ID = "scheduled-tasks"
 
 # When the rolling conversation's replayed context exceeds this (rough) token
 # budget, it is compacted before the next turn: durable facts are flushed to the
@@ -31,18 +41,22 @@ class AgentService:
         # no longer depends on this module's own file location.
         # data_dir holds the conversation DB (mailbot.db); defaults to the repo root.
         self.data_dir = Path(data_dir) if data_dir else Path(__file__).resolve().parent.parent
-        # File-based memory web (replaces Chroma). It lives under the Notes vault
-        # (NOTES_DIR, shared with the NoteTaker) at <NOTES_DIR>/memory, so memory and
-        # notes are one Obsidian vault. The store backs ambient recall + the memory
-        # tools; the extractor distils durable facts into it at compaction.
+        # The agent's self-config folder under the Notes vault: <NOTES_DIR>/Agent
+        # holding memory/, skills/, and the heartbeat/digest runbooks. Memory + notes
+        # stay one Obsidian vault; the whole Agent/ folder is fenced from the NoteTaker.
         notes_dir = Path(os.path.expanduser(os.getenv("NOTES_DIR", DEFAULT_NOTES_DIR)))
-        self.memory_store = FileMemoryStore(notes_dir / "memory")
+        self.agent_dir = AgentDir(notes_dir / AGENT_DIR_NAME)
+        self._migrate_legacy_memory(notes_dir)
+        # Memory web (ambient recall + memory tools; the extractor distils durable
+        # facts into it at compaction) and the on-demand skills store.
+        self.memory_store = FileMemoryStore(self.agent_dir.memory_dir)
         self.memory_extractor = MemoryExtractor(self.memory_store)
+        self.skill_store = SkillStore(self.agent_dir.skills_dir)
         self.session_service = DatabaseSessionService(
             db_url=f"sqlite+aiosqlite:///{self.data_dir / 'mailbot.db'}"
         )
         self.runner = Runner(
-            agent=build_root_agent(self.memory_store),
+            agent=build_root_agent(self.memory_store, self.skill_store, self.agent_dir),
             app_name=APP_NAME,
             session_service=self.session_service,
             # NOTE: no `memory_service=` — it only fed ADK's search_memory(), which
@@ -62,7 +76,10 @@ class AgentService:
         return await asyncio.to_thread(self.mail_client.getUnreadEmails)
 
     async def archive_email(self, uid: str, account: str) -> str:
-        return await asyncio.to_thread(self.mail_client.archiveEmail, uid, account)
+        # Inbox-button archive: a single-email batch through the same path.
+        return await asyncio.to_thread(
+            self.mail_client.archiveEmails, [{"uid": uid, "account": account}]
+        )
 
     async def mark_email_read(self, uid: str, account: str) -> str:
         return await asyncio.to_thread(self.mail_client.markRead, uid, account, True)
@@ -140,23 +157,13 @@ class AgentService:
         self._active_sessions[user_id] = new_session.id
         return new_session
 
-    async def send(self, user_id: str, message: str) -> str:
-        session = await self._get_or_create_session(user_id)
-        # Bound the context: when the rolling conversation grows too large, compact
-        # it (flush facts to memory + summarize) BEFORE running, so we never send an
-        # over-limit context to the model.
-        if self._estimate_tokens(session) > MAX_CONTEXT_TOKENS:
-            session = await self._compact(user_id, session)
-
-        user_message = types.Content(
-            role="user",
-            parts=[types.Part(text=message)],
-        )
-
+    async def _run(self, user_id: str, session_id: str, message: str) -> str:
+        """Run one message through the agent on a given session; return final text."""
+        user_message = types.Content(role="user", parts=[types.Part(text=message)])
         final_response = ""
         async for event in self.runner.run_async(
             user_id=user_id,
-            session_id=session.id,
+            session_id=session_id,
             new_message=user_message,
         ):
             if event.is_final_response() and event.content and event.content.parts:
@@ -164,5 +171,43 @@ class AgentService:
                 for part in event.content.parts:
                     if part.text and not part.thought:
                         final_response += part.text
-
         return final_response
+
+    async def send(self, user_id: str, message: str) -> str:
+        session = await self._get_or_create_session(user_id)
+        # Bound the context: when the rolling conversation grows too large, compact
+        # it (flush facts to memory + summarize) BEFORE running, so we never send an
+        # over-limit context to the model.
+        if self._estimate_tokens(session) > MAX_CONTEXT_TOKENS:
+            session = await self._compact(user_id, session)
+        return await self._run(user_id, session.id, message)
+
+    async def run_isolated(self, prompt: str) -> str:
+        """Run a one-off prompt in a fresh, throwaway session.
+
+        Used by scheduled/autonomous tasks (digest, heartbeat) so they don't append
+        to — or trigger compaction of — the user's rolling conversation. Ambient
+        recall (memory + skills) still applies; it's injected via global_instruction,
+        not the session. The session is deleted afterward to avoid accumulation.
+        """
+        session = await self.session_service.create_session(
+            app_name=APP_NAME, user_id=TASK_USER_ID
+        )
+        try:
+            return await self._run(TASK_USER_ID, session.id, prompt)
+        finally:
+            try:
+                await self.session_service.delete_session(
+                    app_name=APP_NAME, user_id=TASK_USER_ID, session_id=session.id
+                )
+            except Exception:
+                pass  # best-effort cleanup; a stray empty session is harmless
+
+    @staticmethod
+    def _migrate_legacy_memory(notes_dir: Path) -> None:
+        """One-time move of a pre-existing <NOTES_DIR>/memory into Agent/memory."""
+        legacy = notes_dir / "memory"
+        target = notes_dir / AGENT_DIR_NAME / "memory"
+        if legacy.is_dir() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(target))

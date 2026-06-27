@@ -16,11 +16,11 @@ load_dotenv()
 DEFAULT_NOTES_DIR = "~/my-stuff/Notes"
 NOTE_SUFFIXES = (".md", ".txt")
 MAX_SEARCH_SNIPPET = 200
-# Top-level subfolders the NoteTaker must not touch. The agent's long-term memory
-# web lives at NOTES_DIR/memory and is owned by FileMemoryStore (which maintains an
-# index, dedup, and backlinks); letting the NoteTaker read/overwrite those notes
-# would corrupt that structure. It stays visible in Obsidian, just not to this agent.
-RESERVED_DIRS = ("memory",)
+# Top-level subfolders the NoteTaker must not touch. The agent's self-config folder
+# (NOTES_DIR/Agent) holds its memory web, skills, and heartbeat/digest runbooks —
+# each owned by its own store. Letting the NoteTaker read/overwrite those would
+# corrupt that structure. It stays visible in Obsidian, just not to this agent.
+RESERVED_DIRS = ("Agent",)
 
 
 class NotesClient:

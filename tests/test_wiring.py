@@ -11,37 +11,50 @@ import tempfile
 
 import pytest
 
+from pathlib import Path
+
 from orchestrator.agent import build_root_agent
+from orchestrator.agent_dir import AgentDir
 from orchestrator.constants import MODEL, SUBAGENT_MODEL
 from orchestrator.memory.store import FileMemoryStore
 from orchestrator.registry import SPECIALISTS, render_team
+from orchestrator.skills.store import SkillStore
 
-# Memory is no longer a specialist (gone from SPECIALISTS), so the specialist-wiring
-# tests below don't cover it; FileMemoryStore behavior is tested in
-# tests/test_memory_store.py, and memory-tool/index wiring is asserted here.
+# Memory and skills are no longer specialists (gone from SPECIALISTS), so the
+# specialist-wiring tests below don't cover them; their stores are tested in
+# tests/test_memory_store.py and tests/test_skills.py, and their tool/index wiring is
+# asserted here.
 
 
 @pytest.fixture(scope="module")
 def root_agent():
-    store = FileMemoryStore(tempfile.mkdtemp(prefix="mailbot_mem_"))
-    return build_root_agent(store)
+    base = Path(tempfile.mkdtemp(prefix="mailbot_agentdir_"))
+    store = FileMemoryStore(base / "memory")
+    skills = SkillStore(base / "skills")
+    agent_dir = AgentDir(base)
+    return build_root_agent(store, skills, agent_dir)
 
 
-def test_memory_tools_wired_on_orchestrator(root_agent):
-    # Memory is handled directly by the orchestrator, not a specialist: the plain
-    # tools must be present alongside the specialist AgentTools.
+def test_memory_and_skill_tools_wired_on_orchestrator(root_agent):
+    # Memory and skills are handled directly by the orchestrator, not specialists:
+    # the plain tools must be present alongside the specialist AgentTools.
     names = {getattr(t, "__name__", None) or getattr(t, "name", None) for t in root_agent.tools}
-    for tool in ("recall_memory", "read_memory", "save_memory", "forget_memory"):
+    for tool in (
+        "recall_memory", "read_memory", "save_memory", "forget_memory",
+        "list_skills", "read_skill", "write_skill", "delete_skill",
+        "read_runbook", "write_runbook",
+    ):
         assert tool in names, f"{tool} not wired onto the orchestrator"
 
 
-def test_orchestrator_injects_memory_index(root_agent):
-    # global_instruction is a provider that injects the memory index for ambient recall.
+def test_orchestrator_injects_memory_and_skills(root_agent):
+    # global_instruction injects the memory index AND the skills index (ambient recall).
     class _Ctx:  # minimal stand-in exposing .state (datetime provider ignores the rest)
         state = {}
 
     text = root_agent.global_instruction(_Ctx())
     assert "<known_about_owen>" in text
+    assert "<skills>" in text
 
 
 def test_specialists_are_call_and_return_tools(root_agent):

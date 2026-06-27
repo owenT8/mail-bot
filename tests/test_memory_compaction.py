@@ -123,3 +123,33 @@ def test_send_triggers_compaction_at_threshold():
     _, before2, after2 = asyncio.run(run(over_threshold=True))
     assert after2 != before2
     assert extract_calls["n"] == 1
+
+
+def test_run_isolated_does_not_touch_conversation():
+    """Scheduled tasks run in a throwaway session, never the rolling conversation."""
+    svc = AgentService(data_dir=tempfile.mkdtemp(prefix="mb_iso_"))
+
+    async def fake_run_async(**kwargs):
+        yield SimpleNamespace(
+            is_final_response=lambda: True,
+            content=SimpleNamespace(parts=[SimpleNamespace(text="done", thought=False)]),
+        )
+
+    svc.runner.run_async = fake_run_async
+
+    out = asyncio.run(svc.run_isolated("do a scheduled thing"))
+    assert out == "done"
+    assert svc._active_sessions == {}  # no conversation session was created/registered
+
+
+def test_migrate_legacy_memory(tmp_path):
+    """A pre-existing <NOTES_DIR>/memory is moved into Agent/memory once."""
+    legacy = tmp_path / "memory"
+    legacy.mkdir()
+    (legacy / "index.md").write_text("# Memory index")
+    AgentService._migrate_legacy_memory(tmp_path)
+    assert not legacy.exists()
+    assert (tmp_path / "Agent" / "memory" / "index.md").read_text() == "# Memory index"
+    # idempotent: a second call (target now exists) is a no-op, not an error
+    AgentService._migrate_legacy_memory(tmp_path)
+    assert (tmp_path / "Agent" / "memory" / "index.md").exists()
