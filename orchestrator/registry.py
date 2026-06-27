@@ -15,8 +15,6 @@ from google.adk.agents.llm_agent import Agent
 from orchestrator.agents.calendar_agent.calendar_agent import build_calendar_agent
 from orchestrator.agents.messaging_agent.messaging_agent import build_messaging_agent
 from orchestrator.agents.notetaker_agent.notetaker_agent import build_notetaker_agent
-from orchestrator.agents.search_agent import build_search_agent
-from orchestrator.agents.writer_agent import build_writer_agent
 from orchestrator.memory.store import FileMemoryStore
 
 
@@ -48,19 +46,18 @@ class Specialist:
     build: Callable[[AgentContext], Agent]
 
 
+# Specialists are TOOL-BACKED domains the orchestrator delegates to. The orchestrator
+# itself handles chat, general Q&A (native web search), writing prose, vision, and
+# memory — so there is intentionally NO ResearchAgent (search is native) and NO
+# WriterAgent (the capable orchestrator writes; MessagingAgent only saves drafts).
 SPECIALISTS: list[Specialist] = [
     Specialist(
         name="MessagingAgent",
         when_to_use=(
-            "Use for email (reading, searching, organizing, drafting) and for "
+            "Use for email (reading, searching, organizing, saving drafts) and for "
             "looking up the user's contacts (names, email addresses, phone numbers)."
         ),
         build=lambda ctx: build_messaging_agent(),
-    ),
-    Specialist(
-        name="ResearchAgent",
-        when_to_use="Use for all knowledge or current event queries.",
-        build=lambda ctx: build_search_agent(),
     ),
     Specialist(
         name="CalendarAgent",
@@ -70,22 +67,6 @@ SPECIALISTS: list[Specialist] = [
             "events."
         ),
         build=lambda ctx: build_calendar_agent(),
-    ),
-    # NOTE: there is intentionally no MemoryAgent. Memory is not a routed specialist
-    # — it's a substrate. Recall is ambient (the memory index is injected into the
-    # orchestrator's global_instruction every turn) and writes happen automatically
-    # at compaction; explicit remember/recall/forget are plain tools on the
-    # orchestrator (see agent.py + orchestrator/memory/tools.py). Do NOT re-add a
-    # Specialist entry here.
-    Specialist(
-        name="WriterAgent",
-        when_to_use=(
-            "Use to WRITE or polish the actual text of an email, reply, or message. "
-            "Give it the recipient and Owen's relationship to them, the purpose, and "
-            "the raw facts to include; it returns well-written prose. Always use it to "
-            "compose message text before saving a draft — the other agents write poorly."
-        ),
-        build=lambda ctx: build_writer_agent(),
     ),
     Specialist(
         name="NoteTakerAgent",

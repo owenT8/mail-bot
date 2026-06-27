@@ -75,12 +75,6 @@ class AgentService:
     async def fetch_unread(self) -> list[dict]:
         return await asyncio.to_thread(self.mail_client.getUnreadEmails)
 
-    async def archive_email(self, uid: str, account: str) -> str:
-        # Inbox-button archive: a single-email batch through the same path.
-        return await asyncio.to_thread(
-            self.mail_client.archiveEmails, [{"uid": uid, "account": account}]
-        )
-
     async def mark_email_read(self, uid: str, account: str) -> str:
         return await asyncio.to_thread(self.mail_client.markRead, uid, account, True)
 
@@ -157,9 +151,26 @@ class AgentService:
         self._active_sessions[user_id] = new_session.id
         return new_session
 
-    async def _run(self, user_id: str, session_id: str, message: str) -> str:
-        """Run one message through the agent on a given session; return final text."""
-        user_message = types.Content(role="user", parts=[types.Part(text=message)])
+    @staticmethod
+    def _user_content(message: str, attachments=None) -> types.Content:
+        """Build the user turn: the text plus any image attachments (multimodal).
+
+        attachments: list of {"mime_type": str, "data": bytes} (e.g. Telegram photos).
+        """
+        parts = []
+        if message:
+            parts.append(types.Part(text=message))
+        for att in attachments or []:
+            parts.append(
+                types.Part.from_bytes(data=att["data"], mime_type=att["mime_type"])
+            )
+        return types.Content(role="user", parts=parts)
+
+    async def _run(
+        self, user_id: str, session_id: str, message: str, attachments=None
+    ) -> str:
+        """Run one message (optionally with images) on a given session; return text."""
+        user_message = self._user_content(message, attachments)
         final_response = ""
         async for event in self.runner.run_async(
             user_id=user_id,
@@ -173,14 +184,14 @@ class AgentService:
                         final_response += part.text
         return final_response
 
-    async def send(self, user_id: str, message: str) -> str:
+    async def send(self, user_id: str, message: str, attachments=None) -> str:
         session = await self._get_or_create_session(user_id)
         # Bound the context: when the rolling conversation grows too large, compact
         # it (flush facts to memory + summarize) BEFORE running, so we never send an
         # over-limit context to the model.
         if self._estimate_tokens(session) > MAX_CONTEXT_TOKENS:
             session = await self._compact(user_id, session)
-        return await self._run(user_id, session.id, message)
+        return await self._run(user_id, session.id, message, attachments)
 
     async def run_isolated(self, prompt: str) -> str:
         """Run a one-off prompt in a fresh, throwaway session.

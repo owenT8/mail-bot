@@ -3,16 +3,17 @@ per-account special folders. No network."""
 
 import types
 
+from imap_tools import MailMessageFlags
+
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 
 
 def test_special_folders_per_account():
     assert MailClient._special_folder("gmail", "trash") == "[Gmail]/Trash"
     assert MailClient._special_folder("gmail", "drafts") == "[Gmail]/Drafts"
-    assert MailClient._special_folder("gmail", "archive") == "[Gmail]/All Mail"
-    assert MailClient._special_folder("icloud", "trash") == "Trash"
+    # iCloud's trash folder is "Deleted Messages", not "Trash".
+    assert MailClient._special_folder("icloud", "trash") == "Deleted Messages"
     assert MailClient._special_folder("icloud", "drafts") == "Drafts"
-    assert MailClient._special_folder("icloud", "archive") == "Archive"
     # Unknown account falls back to a capitalized folder name.
     assert MailClient._special_folder("yahoo", "trash") == "Trash"
 
@@ -47,30 +48,10 @@ def test_build_message_reply_sets_threading_headers():
     assert msg["References"] == "<abc123@mail.example.com>"
 
 
-# --- archive_emails / move_to_important: batch, read/unread, verified inbox removal ---
-
-class _FakeFolderMgr:
-    def __init__(self, existing):
-        self.existing = set(existing)
-        self.created = []
-
-    def exists(self, name):
-        return name in self.existing
-
-    def create(self, name):
-        self.created.append(name)
-        self.existing.add(name)
-
+# --- mark_emails_read: the only triage action (no moves/sorting) ---
 
 class _FakeMailbox:
-    """Models an INBOX: move() removes uids from the inbox unless the destination is
-    a 'sticky' folder (simulating Gmail's Important label, which doesn't drop \\Inbox)."""
-
-    def __init__(self, existing_folders=(), inbox_uids=(), sticky_folders=()):
-        self.folder = _FakeFolderMgr(existing_folders)
-        self.inbox = {str(u) for u in inbox_uids}
-        self.sticky_folders = set(sticky_folders)
-        self.moves = []  # (uids, folder)
+    def __init__(self):
         self.flags = []  # (uids, flag, value)
 
     def __enter__(self):
@@ -82,15 +63,6 @@ class _FakeMailbox:
     def flag(self, uids, flag, value):
         self.flags.append(([str(u) for u in uids], flag, value))
 
-    def move(self, uids, folder):
-        uids = [str(u) for u in uids]
-        self.moves.append((uids, folder))
-        if folder not in self.sticky_folders:
-            self.inbox -= set(uids)
-
-    def uids(self, criteria="ALL"):
-        return list(self.inbox)
-
 
 def _client(mailboxes_by_label):
     mc = MailClient.__new__(MailClient)  # bypass __init__ (no env / no accounts)
@@ -100,74 +72,41 @@ def _client(mailboxes_by_label):
     return mc
 
 
-def test_archive_batches_by_account_and_marks_read():
-    gmail = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["1", "2"])
-    icloud = _FakeMailbox(["Archive"], inbox_uids=["3"])
+def test_mark_emails_read_batches_by_account():
+    gmail = _FakeMailbox()
+    icloud = _FakeMailbox()
     mc = _client({"gmail": gmail, "icloud": icloud})
-    out = mc.archiveEmails([
+    out = mc.markEmailsRead([
         {"uid": "1", "account": "gmail"},
         {"uid": "2", "account": "gmail"},
         {"uid": "3", "account": "icloud"},
     ])
-    assert gmail.moves == [(["1", "2"], "[Gmail]/All Mail")]  # one move per account
-    assert icloud.moves == [(["3"], "Archive")]
-    assert gmail.inbox == set() and icloud.inbox == set()  # left the inbox
-    assert all(value is True for (_, _, value) in gmail.flags + icloud.flags)  # marked read
-    assert "Archived 3 email" in out and "did not" not in out
+    assert gmail.flags == [(["1", "2"], MailMessageFlags.SEEN, True)]  # one flag op per account
+    assert icloud.flags == [(["3"], MailMessageFlags.SEEN, True)]
+    assert "Marked 3 email" in out and "failed" not in out
 
 
-def test_important_icloud_creates_folder_and_marks_unread():
-    mb = _FakeMailbox(existing_folders=[], inbox_uids=["9", "10"])
+def test_mark_emails_unread():
+    mb = _FakeMailbox()
     mc = _client({"icloud": mb})
-    mc.moveToImportant([
-        {"uid": "9", "account": "icloud"},
-        {"uid": "10", "account": "icloud"},
-    ])
-    assert mb.folder.created == ["Important"]  # created on the fly
-    assert mb.moves == [(["9", "10"], "Important")]
-    assert mb.inbox == set()
-    assert all(value is False for (_, _, value) in mb.flags)  # marked UNREAD
+    out = mc.markEmailsRead([{"uid": "9", "account": "icloud"}], read=False)
+    assert mb.flags == [(["9"], MailMessageFlags.SEEN, False)]
+    assert "Marked 1 email(s) unread" in out
 
 
-def test_important_gmail_archives_to_leave_inbox():
-    # Gmail's Important is a sticky label (move doesn't drop \Inbox); we then archive
-    # the stuck message to All Mail so it actually leaves the inbox.
-    gmail = _FakeMailbox(
-        existing_folders=["[Gmail]/All Mail"],
-        inbox_uids=["5"],
-        sticky_folders={"[Gmail]/Important"},
-    )
-    mc = _client({"gmail": gmail})
-    out = mc.moveToImportant([{"uid": "5", "account": "gmail"}])
-    assert (["5"], "[Gmail]/Important") in gmail.moves  # labeled important
-    assert (["5"], "[Gmail]/All Mail") in gmail.moves   # then archived to leave inbox
-    assert gmail.inbox == set()
-    assert "Moved to Important: 1 email" in out and "did not" not in out
+def test_mark_emails_read_reports_per_account_failure():
+    good = _FakeMailbox()
+    bad = _FakeMailbox()
 
-
-def test_organize_detects_silent_no_op():
-    # The move is accepted but the message stays in the inbox (the iCloud symptom).
-    # Verification via uids() catches it instead of falsely reporting success.
-    mb = _FakeMailbox(["Archive"], inbox_uids=["1"], sticky_folders={"Archive"})
-    mc = _client({"icloud": mb})
-    out = mc.archiveEmails([{"uid": "1", "account": "icloud"}])
-    assert "Archived 0 email" in out
-    assert "did not leave the inbox" in out and "icloud:" in out
-
-
-def test_organize_reports_per_account_failure_without_aborting():
-    good = _FakeMailbox(["Archive"], inbox_uids=["1"])
-    bad = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["2"])
-
-    def boom(uids, folder):
+    def boom(*a):
         raise RuntimeError("imap error")
 
-    bad.move = boom
+    bad.flag = boom
     mc = _client({"icloud": good, "gmail": bad})
-    out = mc.archiveEmails([
+    out = mc.markEmailsRead([
         {"uid": "1", "account": "icloud"},
         {"uid": "2", "account": "gmail"},
     ])
-    assert good.inbox == set()  # the healthy account still ran
-    assert "Archived 1 email" in out
+    assert good.flags  # the healthy account still ran
+    assert "Marked 1 email" in out
     assert "gmail:" in out and "imap error" in out  # the failure is surfaced

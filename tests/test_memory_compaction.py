@@ -142,6 +142,27 @@ def test_run_isolated_does_not_touch_conversation():
     assert svc._active_sessions == {}  # no conversation session was created/registered
 
 
+def test_user_content_builds_text_and_image_parts():
+    c = AgentService._user_content(
+        "look at this", [{"mime_type": "image/jpeg", "data": b"\xff\xd8\xff"}]
+    )
+    assert c.role == "user"
+    assert len(c.parts) == 2
+    assert c.parts[0].text == "look at this"
+    assert c.parts[1].inline_data.mime_type == "image/jpeg"  # image part
+    assert c.parts[1].inline_data.data == b"\xff\xd8\xff"
+
+
+def test_user_content_text_only():
+    c = AgentService._user_content("hi", None)
+    assert len(c.parts) == 1 and c.parts[0].text == "hi"
+
+
+def test_user_content_image_only():
+    c = AgentService._user_content("", [{"mime_type": "image/png", "data": b"\x89PNG"}])
+    assert len(c.parts) == 1 and c.parts[0].inline_data.mime_type == "image/png"
+
+
 def test_migrate_legacy_memory(tmp_path):
     """A pre-existing <NOTES_DIR>/memory is moved into Agent/memory once."""
     legacy = tmp_path / "memory"

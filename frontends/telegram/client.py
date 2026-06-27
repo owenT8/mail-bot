@@ -122,7 +122,9 @@ class TelegramFrontend:
             "/inbox – unread emails with tap-to-act buttons\n"
             "/fetchemails – a triaged summary of your latest emails\n"
             "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n"
-            "/heartbeat – view/set a recurring check-in (e.g. /heartbeat 30m, /heartbeat off)\n",
+            "/heartbeat – view/set a recurring check-in (e.g. /heartbeat 30m, /heartbeat off)\n\n"
+            "Send me a photo too — a letter, a flyer, or handwritten notes — and I'll read it "
+            "(and save notes to your vault).",
             parse_mode="HTML",
         )
 
@@ -139,11 +141,14 @@ class TelegramFrontend:
             self.logger.warning("Typing indicator loop stopped early", exc_info=True)
 
     async def _run_with_typing(
-        self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message: str
+        self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message: str,
+        attachments=None,
     ) -> str:
         typing_task = asyncio.create_task(self._typing_loop(chat_id, context))
         try:
-            return await self.agent.send(user_id=str(chat_id), message=message)
+            return await self.agent.send(
+                user_id=str(chat_id), message=message, attachments=attachments
+            )
         finally:
             typing_task.cancel()
 
@@ -157,6 +162,28 @@ class TelegramFrontend:
         self.logger.info("Text message received")
         chat_id = update.effective_chat.id
         response = await self._run_with_typing(chat_id, context, update.message.text)
+        await self.sendMessage(update, response)
+
+    async def _download_images(self, message, bot) -> list[dict]:
+        """Pull image bytes from a Telegram photo or image-document message."""
+        sources = []
+        if message.photo:
+            sources.append((message.photo[-1].file_id, "image/jpeg"))  # largest size
+        doc = message.document
+        if doc and (doc.mime_type or "").startswith("image/"):
+            sources.append((doc.file_id, doc.mime_type))
+        images = []
+        for file_id, mime in sources:
+            f = await bot.get_file(file_id)
+            images.append({"mime_type": mime, "data": bytes(await f.download_as_bytearray())})
+        return images
+
+    async def photoMessage(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self.logger.info("Image message received")
+        chat_id = update.effective_chat.id
+        images = await self._download_images(update.message, context.bot)
+        caption = update.message.caption or ""
+        response = await self._run_with_typing(chat_id, context, caption, attachments=images)
         await self.sendMessage(update, response)
 
     # ------------------------------------------------------------------
@@ -184,7 +211,6 @@ class TelegramFrontend:
                 InlineKeyboardButton("✗ Cancel", callback_data=mail_cb("cancel", account, uid)),
             ]])
         return InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Archive", callback_data=mail_cb("archive", account, uid)),
             InlineKeyboardButton("✓ Read", callback_data=mail_cb("read", account, uid)),
             InlineKeyboardButton("🗑 Trash", callback_data=mail_cb("trash", account, uid)),
         ]])
@@ -215,11 +241,7 @@ class TelegramFrontend:
             return
         action, account, uid = parse_mail_cb(query.data)
         try:
-            if action == "archive":
-                await self.agent.archive_email(uid, account)
-                await query.answer("Archived ✓")
-                await query.edit_message_text("📥 Archived.")
-            elif action == "read":
+            if action == "read":
                 await self.agent.mark_email_read(uid, account)
                 await query.answer("Marked read ✓")  # leave card + buttons in place
             elif action == "trash":
@@ -433,6 +455,11 @@ class TelegramFrontend:
         app.add_handler(CommandHandler("digest", self.digest, filters=user_filter))
         app.add_handler(CommandHandler("heartbeat", self.heartbeat, filters=user_filter))
         app.add_handler(CallbackQueryHandler(self._on_mail_callback, pattern="^mail:"))
+        app.add_handler(
+            MessageHandler(
+                (filters.PHOTO | filters.Document.IMAGE) & user_filter, self.photoMessage
+            )
+        )
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, self.textMessage)
         )
