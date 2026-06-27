@@ -15,7 +15,7 @@ from pathlib import Path
 
 from orchestrator.agent import build_root_agent
 from orchestrator.agent_dir import AgentDir
-from orchestrator.constants import MODEL, SUBAGENT_MODEL
+from orchestrator.constants import MODEL, ORCHESTRATOR_MODEL, SUBAGENT_MODEL
 from orchestrator.memory.store import FileMemoryStore
 from orchestrator.registry import SPECIALISTS, render_team
 from orchestrator.skills.store import SkillStore
@@ -109,12 +109,20 @@ def test_specialist_names_unique():
 
 
 def test_model_split(root_agent):
-    # Orchestrator + the WriterAgent stay on the capable model (routing/synthesis
-    # and prose quality); the "doer" specialists run the lighter, faster model.
-    assert root_agent.model == MODEL
+    # The orchestrator is the primary assistant — most capable model.
+    assert root_agent.model == ORCHESTRATOR_MODEL
     by_name = {t.name: t.agent for t in root_agent.tools if getattr(t, "agent", None)}
-    # Composition/reasoning agents need the capable model.
-    assert by_name["WriterAgent"].model == MODEL
+    # Reasoning-heavy specialists on MODEL; the lighter "doer" on SUBAGENT_MODEL.
+    assert by_name["MessagingAgent"].model == MODEL
     assert by_name["NoteTakerAgent"].model == MODEL
-    for name in ("MessagingAgent", "CalendarAgent", "ResearchAgent"):
-        assert by_name[name].model == SUBAGENT_MODEL, f"{name} not on SUBAGENT_MODEL"
+    assert by_name["CalendarAgent"].model == SUBAGENT_MODEL
+
+
+def test_orchestrator_has_planner_and_native_search(root_agent):
+    # Reasoning is enabled via an ADK planner, and web search is the orchestrator's
+    # own tool (ResearchAgent is gone — search is not a specialist).
+    assert root_agent.planner is not None
+    tool_names = {getattr(t, "name", None) or getattr(t, "__name__", None) for t in root_agent.tools}
+    assert "google_search" in tool_names
+    assert "ResearchAgent" not in {s.name for s in SPECIALISTS}
+    assert "WriterAgent" not in {s.name for s in SPECIALISTS}

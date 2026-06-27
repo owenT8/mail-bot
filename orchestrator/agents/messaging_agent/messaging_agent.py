@@ -2,7 +2,7 @@ import asyncio
 
 from google.adk.agents.llm_agent import Agent
 
-from orchestrator.constants import MESSAGING_AGENT_PROMPT, MODEL, SUBAGENT_MODEL
+from orchestrator.constants import MESSAGING_AGENT_PROMPT, MODEL
 from orchestrator.agents.messaging_agent.mail_client import MailClient
 from orchestrator.agents.messaging_agent.contacts_client import ContactsClient
 from orchestrator.agents.messaging_agent.attachments import read_attachment_text
@@ -194,7 +194,7 @@ def build_messaging_agent() -> Agent:
         return await asyncio.to_thread(contacts.list_contacts, limit)
 
     return Agent(
-        model=SUBAGENT_MODEL,
+        model=MODEL,
         name="MessagingAgent",
         description="Reads/searches/organizes/drafts (never sends) my email, and looks up my contacts.",
         instruction=MESSAGING_AGENT_PROMPT,
