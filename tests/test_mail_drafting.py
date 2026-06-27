@@ -10,7 +10,11 @@ def test_special_folders_per_account():
     assert MailClient._special_folder("gmail", "trash") == "[Gmail]/Trash"
     assert MailClient._special_folder("gmail", "drafts") == "[Gmail]/Drafts"
     assert MailClient._special_folder("gmail", "archive") == "[Gmail]/All Mail"
-    assert MailClient._special_folder("icloud", "trash") == "Trash"
+    # "important" is the plain writable label on both, not Gmail's system [Gmail]/Important.
+    assert MailClient._special_folder("gmail", "important") == "Important"
+    assert MailClient._special_folder("icloud", "important") == "Important"
+    # iCloud's trash folder is "Deleted Messages", not "Trash".
+    assert MailClient._special_folder("icloud", "trash") == "Deleted Messages"
     assert MailClient._special_folder("icloud", "drafts") == "Drafts"
     assert MailClient._special_folder("icloud", "archive") == "Archive"
     # Unknown account falls back to a capitalized folder name.
@@ -129,19 +133,15 @@ def test_important_icloud_creates_folder_and_marks_unread():
     assert all(value is False for (_, _, value) in mb.flags)  # marked UNREAD
 
 
-def test_important_gmail_archives_to_leave_inbox():
-    # Gmail's Important is a sticky label (move doesn't drop \Inbox); we then archive
-    # the stuck message to All Mail so it actually leaves the inbox.
-    gmail = _FakeMailbox(
-        existing_folders=["[Gmail]/All Mail"],
-        inbox_uids=["5"],
-        sticky_folders={"[Gmail]/Important"},
-    )
+def test_important_gmail_targets_writable_label():
+    # Gmail "important" goes to the plain, writable "Important" label (NOT the
+    # unwritable system [Gmail]/Important), in a single move that leaves the inbox.
+    gmail = _FakeMailbox(existing_folders=["Important"], inbox_uids=["5"])
     mc = _client({"gmail": gmail})
     out = mc.moveToImportant([{"uid": "5", "account": "gmail"}])
-    assert (["5"], "[Gmail]/Important") in gmail.moves  # labeled important
-    assert (["5"], "[Gmail]/All Mail") in gmail.moves   # then archived to leave inbox
+    assert gmail.moves == [(["5"], "Important")]
     assert gmail.inbox == set()
+    assert all(value is False for (_, _, value) in gmail.flags)  # unread
     assert "Moved to Important: 1 email" in out and "did not" not in out
 
 

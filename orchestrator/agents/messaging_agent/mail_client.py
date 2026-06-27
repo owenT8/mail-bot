@@ -19,18 +19,17 @@ GMAIL_HOST = "imap.gmail.com"
 ICLOUD_HOST = "imap.mail.me.com"
 
 # Per-account special folders (display names differ between providers). "important"
-# is the curated priority destination: Gmail reserves the name "Important" (it's the
-# system [Gmail]/Important folder), so we target that there; iCloud uses a plain
-# "Important" folder, created on first use.
+# is a plain, writable "Important" label/folder on BOTH providers — NOT Gmail's system
+# [Gmail]/Important, which IMAP cannot write to (moving there just archives, unlabeled).
 ACCOUNT_FOLDERS = {
     "gmail": {
         "trash": "[Gmail]/Trash",
         "drafts": "[Gmail]/Drafts",
         "archive": "[Gmail]/All Mail",
-        "important": "[Gmail]/Important",
+        "important": "Important",
     },
     "icloud": {
-        "trash": "Trash",
+        "trash": "Deleted Messages",
         "drafts": "Drafts",
         "archive": "Archive",
         "important": "Important",
@@ -293,15 +292,6 @@ class MailClient:
                                 "Skipped creating folder %r in %s: %s", folder, label, e
                             )
                     mailbox.move(uids, folder)
-                    # Gmail "Important" is a label — the move adds it but may not remove
-                    # \Inbox. Anything still in the inbox gets archived to guarantee it
-                    # leaves (archive-to-All-Mail reliably drops the inbox label).
-                    if kind == "important" and label == "gmail":
-                        stuck = self._uids_present(mailbox, uids)
-                        if stuck:
-                            mailbox.move(
-                                sorted(stuck), self._special_folder(label, "archive")
-                            )
                     still_in_inbox = self._uids_present(mailbox, uids)
                 moved_here = len(uids) - len(still_in_inbox)
                 moved += moved_here
@@ -336,11 +326,13 @@ class MailClient:
 
     def archiveEmails(self, items: list[dict]) -> str:
         """Archive a batch of {uid, account} emails (out of the inbox), marking them read."""
+        logger.info("archiveEmails received: %s", items)
         moved, errors = self._organize(items, "archive", mark_seen=True)
         return self._move_summary("Archived", moved, errors)
 
     def moveToImportant(self, items: list[dict]) -> str:
         """Move a batch of {uid, account} emails to Important (out of the inbox), unread."""
+        logger.info("moveToImportant received: %s", items)
         moved, errors = self._organize(
             items, "important", mark_seen=False, create_if_missing=True
         )
