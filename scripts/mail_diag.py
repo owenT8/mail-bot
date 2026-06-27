@@ -43,6 +43,7 @@ def main() -> None:
 
     for acc in mc.accounts:
         print(f"\n===================== {acc.label}  ({acc.host}) =====================")
+        print(f"  authenticated as: {acc.user!r}")
         try:
             with mc._mailbox(acc) as mb:
                 try:
