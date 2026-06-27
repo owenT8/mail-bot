@@ -96,29 +96,18 @@ def build_messaging_agent() -> Agent:
         """List folder names per mailbox. account "" lists all; or "gmail"/"icloud"."""
         return await asyncio.to_thread(client.listFolders, account or None)
 
-    async def archive_emails(emails: list[dict]) -> str:
-        """Archive one or more emails (move them out of the inbox to the Archive).
-        Pre-authorized — do it immediately, no confirmation needed. Takes a LIST so you
-        can archive several at once in a single action.
+    async def mark_emails_read(emails: list[dict]) -> str:
+        """Mark one or more emails as READ. This is how you clear UNIMPORTANT mail during
+        triage — mark it read so it stops nagging, without moving it anywhere.
+        Pre-authorized — do it immediately, no confirmation. Takes a LIST so you can
+        clear several at once in a single action.
 
         Args:
-            emails: a list of emails to archive, each a dict
+            emails: a list of emails to mark read, each a dict
                 {"uid": <email uid>, "account": "gmail" | "icloud"} — exactly as
                 returned by get_unread_emails / search_emails.
         """
-        return await asyncio.to_thread(client.archiveEmails, emails)
-
-    async def move_to_important(emails: list[dict]) -> str:
-        """Move one or more emails into the "Important" folder (the user's curated
-        priority folder, created automatically if it doesn't exist yet). Pre-authorized
-        — do it immediately, no confirmation needed. Takes a LIST so you can move several
-        at once.
-
-        Args:
-            emails: a list of emails to move, each a dict
-                {"uid": <email uid>, "account": "gmail" | "icloud"}.
-        """
-        return await asyncio.to_thread(client.moveToImportant, emails)
+        return await asyncio.to_thread(client.markEmailsRead, emails, True)
 
     async def delete_email(email_uid: str, account: str) -> str:
         """Move an email to Trash (reversible) in the given mailbox.
@@ -205,8 +194,7 @@ def build_messaging_agent() -> Agent:
             get_email,
             read_attachment,
             list_folders,
-            archive_emails,
-            move_to_important,
+            mark_emails_read,
             delete_email,
             mark_email_read,
             flag_email,

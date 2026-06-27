@@ -211,7 +211,6 @@ class TelegramFrontend:
                 InlineKeyboardButton("✗ Cancel", callback_data=mail_cb("cancel", account, uid)),
             ]])
         return InlineKeyboardMarkup([[
-            InlineKeyboardButton("📥 Archive", callback_data=mail_cb("archive", account, uid)),
             InlineKeyboardButton("✓ Read", callback_data=mail_cb("read", account, uid)),
             InlineKeyboardButton("🗑 Trash", callback_data=mail_cb("trash", account, uid)),
         ]])
@@ -242,11 +241,7 @@ class TelegramFrontend:
             return
         action, account, uid = parse_mail_cb(query.data)
         try:
-            if action == "archive":
-                await self.agent.archive_email(uid, account)
-                await query.answer("Archived ✓")
-                await query.edit_message_text("📥 Archived.")
-            elif action == "read":
+            if action == "read":
                 await self.agent.mark_email_read(uid, account)
                 await query.answer("Marked read ✓")  # leave card + buttons in place
             elif action == "trash":

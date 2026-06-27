@@ -18,22 +18,11 @@ MAX_BODY_CHARS = 2000
 GMAIL_HOST = "imap.gmail.com"
 ICLOUD_HOST = "imap.mail.me.com"
 
-# Per-account special folders (display names differ between providers). "important"
-# is a plain, writable "Important" label/folder on BOTH providers — NOT Gmail's system
-# [Gmail]/Important, which IMAP cannot write to (moving there just archives, unlabeled).
+# Per-account special folders (display names differ between providers). We don't sort
+# mail into folders anymore (only trash + drafts are used — by delete and draft).
 ACCOUNT_FOLDERS = {
-    "gmail": {
-        "trash": "[Gmail]/Trash",
-        "drafts": "[Gmail]/Drafts",
-        "archive": "[Gmail]/All Mail",
-        "important": "Important",
-    },
-    "icloud": {
-        "trash": "Deleted Messages",
-        "drafts": "Drafts",
-        "archive": "Archive",
-        "important": "Important",
-    },
+    "gmail": {"trash": "[Gmail]/Trash", "drafts": "[Gmail]/Drafts"},
+    "icloud": {"trash": "Deleted Messages", "drafts": "Drafts"},
 }
 
 
@@ -251,112 +240,33 @@ class MailClient:
     # Mutating actions
     # ------------------------------------------------------------------
 
-    def _organize(
-        self,
-        items: list[dict],
-        kind: str,
-        mark_seen: bool,
-        create_if_missing: bool = False,
-    ) -> tuple[int, list[str]]:
-        """Take a batch of {uid, account} emails out of the inbox, per account, setting
-        read/unread first and VERIFYING they actually left the inbox.
-
-        Provider-specific, because Gmail's folders are LABELS, not real folders, and
-        imap_tools' move (copy + \\Deleted + expunge) handles them unreliably:
-          - Gmail: use native X-GM-LABELS — archive removes the \\Inbox label; important
-            adds the "Important" label then removes \\Inbox. (Everything stays in All Mail.)
-          - iCloud / other: move to the real `kind` folder (created if missing).
-        Read state is set while the message is still in the inbox so it carries over.
-        Anything that didn't actually leave the inbox is reported per account.
-
-        Returns (count_moved, errors).
+    def markEmailsRead(self, items: list[dict], read: bool = True) -> str:
+        """Mark a batch of {uid, account} emails read (or unread). The only triage
+        action we take — a basic, reliable \\Seen flag, no folder moves. Grouped by
+        account; per-account failures are reported rather than silently swallowed.
         """
+        logger.info("markEmailsRead received (read=%s): %s", read, items)
         self._require_accounts()
         by_account: dict[str, list[str]] = {}
         for item in items:
             by_account.setdefault(item["account"], []).append(str(item["uid"]))
 
-        moved = 0
+        done = 0
         errors: list[str] = []
         for label, uids in by_account.items():
             account = self._account(label)
             try:
                 with self._mailbox(account) as mailbox:
-                    # Set read/unread while still in the inbox so it carries over.
-                    mailbox.flag(uids, MailMessageFlags.SEEN, mark_seen)
-                    if label == "gmail":
-                        self._gmail_organize(mailbox, uids, kind)
-                        dest = f"Gmail labels ({kind})"
-                    else:
-                        dest = self._special_folder(label, kind)
-                        if create_if_missing and not mailbox.folder.exists(dest):
-                            try:
-                                mailbox.folder.create(dest)
-                            except Exception as e:
-                                logger.info(
-                                    "Skipped creating folder %r in %s: %s", dest, label, e
-                                )
-                        mailbox.move(uids, dest)
-                    still_in_inbox = self._uids_present(mailbox, uids)
-                moved_here = len(uids) - len(still_in_inbox)
-                moved += moved_here
-                logger.info(
-                    "Organized %d/%d email(s) to %s in %s (mark_seen=%s)",
-                    moved_here, len(uids), dest, label, mark_seen,
-                )
-                if still_in_inbox:
-                    errors.append(
-                        f"{label}: {len(still_in_inbox)} of {len(uids)} did not leave the inbox"
-                    )
+                    mailbox.flag(uids, MailMessageFlags.SEEN, read)
+                done += len(uids)
+                logger.info("Marked %d email(s) %s in %s", len(uids), "read" if read else "unread", label)
             except Exception as e:
-                logger.error(
-                    "Failed to organize %d email(s) (%s) in %s: %s",
-                    len(uids), kind, label, e, exc_info=True,
-                )
+                logger.error("Failed to mark %d email(s) in %s: %s", len(uids), label, e, exc_info=True)
                 errors.append(f"{label}: {e}")
-        return moved, errors
-
-    @staticmethod
-    def _gmail_store(mailbox, uids: list[str], op: str, value: str) -> None:
-        """Issue a raw Gmail X-GM-LABELS STORE (label add/remove) for a UID set."""
-        uid_set = ",".join(str(u) for u in uids)
-        typ, data = mailbox.client.uid("STORE", uid_set, op, value)
-        if typ != "OK":
-            raise RuntimeError(f"Gmail STORE {op} {value} failed: {data}")
-
-    def _gmail_organize(self, mailbox, uids: list[str], kind: str) -> None:
-        """Organize Gmail mail via labels: 'important' adds the Important label; both
-        archive and important drop the \\Inbox label so the message leaves the inbox."""
-        if kind == "important":
-            self._gmail_store(mailbox, uids, "+X-GM-LABELS", '("Important")')
-        self._gmail_store(mailbox, uids, "-X-GM-LABELS", "(\\Inbox)")
-
-    @staticmethod
-    def _uids_present(mailbox, uids: list[str]) -> set[str]:
-        """Which of `uids` are still in the inbox. Reliable check via a UID SEARCH of
-        the whole inbox (not a swallow-on-error fetch), so a no-op move is caught."""
-        return set(mailbox.uids()) & {str(u) for u in uids}
-
-    @staticmethod
-    def _move_summary(verb: str, moved: int, errors: list[str]) -> str:
-        msg = f"{verb} {moved} email(s)."
+        msg = f"Marked {done} email(s) {'read' if read else 'unread'}."
         if errors:
-            msg += " Some did not complete — " + "; ".join(errors)
+            msg += " Some failed — " + "; ".join(errors)
         return msg
-
-    def archiveEmails(self, items: list[dict]) -> str:
-        """Archive a batch of {uid, account} emails (out of the inbox), marking them read."""
-        logger.info("archiveEmails received: %s", items)
-        moved, errors = self._organize(items, "archive", mark_seen=True)
-        return self._move_summary("Archived", moved, errors)
-
-    def moveToImportant(self, items: list[dict]) -> str:
-        """Move a batch of {uid, account} emails to Important (out of the inbox), unread."""
-        logger.info("moveToImportant received: %s", items)
-        moved, errors = self._organize(
-            items, "important", mark_seen=False, create_if_missing=True
-        )
-        return self._move_summary("Moved to Important:", moved, errors)
 
     def deleteEmail(self, email_uid: str, account: str) -> str:
         """Move an email to Trash (reversible) in the given account."""

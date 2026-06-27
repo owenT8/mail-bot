@@ -75,12 +75,6 @@ class AgentService:
     async def fetch_unread(self) -> list[dict]:
         return await asyncio.to_thread(self.mail_client.getUnreadEmails)
 
-    async def archive_email(self, uid: str, account: str) -> str:
-        # Inbox-button archive: a single-email batch through the same path.
-        return await asyncio.to_thread(
-            self.mail_client.archiveEmails, [{"uid": uid, "account": account}]
-        )
-
     async def mark_email_read(self, uid: str, account: str) -> str:
         return await asyncio.to_thread(self.mail_client.markRead, uid, account, True)
 
