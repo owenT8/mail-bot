@@ -426,10 +426,16 @@ DEFAULT_DIGEST_INSTRUCTIONS = (
 )
 
 DEFAULT_HEARTBEAT_INSTRUCTIONS = (
-    "Check for anything time-sensitive that has come up recently: genuinely urgent "
-    "unread email and imminent calendar events in the next few hours. If something "
-    "needs Owen's attention now, summarize it in one or two concise lines. Routine, "
-    "low-priority, or already-handled items do not count."
+    "Proactively look out for Owen since your last run:\n"
+    "- Triage genuinely urgent unread email — real asks or deadlines, not newsletters or "
+    "promos. You're pre-authorized to archive obvious junk and move clear priorities to "
+    "Important; do that, then mention anything that still needs him.\n"
+    "- Check the next few hours of calendar for imminent events, conflicts, or tight "
+    "back-to-backs.\n"
+    "- Recall any follow-ups or commitments you've noted in memory that are now due or worth a "
+    "nudge.\n"
+    "Report only what truly needs Owen's attention right now — one or two concise lines each, "
+    "most important first. Skip anything routine, low-priority, or already handled."
 )
 
 NOTETAKER_AGENT_PROMPT = """
