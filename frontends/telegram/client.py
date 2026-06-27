@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 import os
+from datetime import datetime
 from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -74,6 +75,30 @@ def parse_interval(value: str) -> int | None:
     return n * _INTERVAL_UNITS[value[-1]]
 
 
+def parse_range(value: str) -> tuple[int, int] | None:
+    """Parse an active window like '8:00-22:00' into (start, end) minutes-since-midnight.
+    Returns None if invalid."""
+    value = (value or "").strip()
+    if value.count("-") != 1:
+        return None
+    a, b = value.split("-")
+    sa, sb = parse_hhmm(a), parse_hhmm(b)
+    if not sa or not sb:
+        return None
+    to_min = lambda hhmm: int(hhmm[:2]) * 60 + int(hhmm[3:])  # noqa: E731
+    return to_min(sa), to_min(sb)
+
+
+def in_window(now_min: int, start: int, end: int) -> bool:
+    """Is now_min (minutes-since-midnight) inside [start, end)? Handles windows that
+    wrap past midnight (start > end), and start == end means always-on."""
+    if start == end:
+        return True
+    if start < end:
+        return start <= now_min < end
+    return now_min >= start or now_min < end
+
+
 class TelegramFrontend:
     """One frontend onto the agent core. It does NOT own the agent — main.py
     builds the AgentService and injects it here, so other callers (e.g. a future
@@ -121,8 +146,9 @@ class TelegramFrontend:
             "Commands:\n"
             "/inbox – unread emails with tap-to-act buttons\n"
             "/fetchemails – a triaged summary of your latest emails\n"
-            "/digest – view/set your morning digest (e.g. /digest 07:30, /digest off)\n"
-            "/heartbeat – view/set a recurring check-in (e.g. /heartbeat 30m, /heartbeat off)\n\n"
+            "/digest – view/set digest times (e.g. /digest 07:30 21:00, /digest off)\n"
+            "/heartbeat – view/set a recurring check-in + active window "
+            "(e.g. /heartbeat 30m 08:00-22:00, /heartbeat off)\n\n"
             "Send me a photo too — a letter, a flyer, or handwritten notes — and I'll read it "
             "(and save notes to your vault).",
             parse_mode="HTML",
@@ -273,45 +299,60 @@ class TelegramFrontend:
     # Morning digest (JobQueue)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _digest_times(bot_data) -> list[str]:
+        # Supports multiple times; migrates the old single `digest_time` if present.
+        times = bot_data.get("digest_times")
+        if times:
+            return times
+        return [bot_data.get("digest_time", DEFAULT_DIGEST_TIME)]
+
     async def digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         bot_data = context.application.bot_data
         if not context.args:
             enabled = bot_data.get("digest_enabled", True)
-            when = bot_data.get("digest_time", DEFAULT_DIGEST_TIME)
-            status = f"on at {when}" if enabled else "off"
+            times = ", ".join(self._digest_times(bot_data))
+            status = f"on at {times}" if enabled else "off"
             await update.message.reply_text(
-                f"Morning digest is <b>{status}</b> ({self.tz_name}).\n"
-                "Use <code>/digest HH:MM</code> to set the time, or <code>/digest off</code>.",
+                f"Digest is <b>{status}</b> ({self.tz_name}).\n"
+                "Set one or more times: <code>/digest 07:30</code> or "
+                "<code>/digest 07:30 21:00</code>, or <code>/digest off</code>.",
                 parse_mode="HTML",
             )
             return
-        arg = context.args[0].strip().lower()
-        if arg == "off":
+        args = [a.strip().lower() for a in context.args]
+        if args == ["off"]:
             bot_data["digest_enabled"] = False
             self._reschedule_digest(context.application)
-            await update.message.reply_text("Morning digest turned off.")
+            await update.message.reply_text("Digest turned off.")
             return
-        when = parse_hhmm(arg)
-        if not when:
-            await update.message.reply_text("Usage: /digest HH:MM (24-hour), or /digest off")
+        times = [parse_hhmm(a) for a in args]
+        if any(t is None for t in times):
+            await update.message.reply_text(
+                "Usage: /digest HH:MM [HH:MM ...] (24-hour), or /digest off"
+            )
             return
         bot_data["digest_enabled"] = True
-        bot_data["digest_time"] = when
+        bot_data["digest_times"] = sorted(set(times))
         self._reschedule_digest(context.application)
-        await update.message.reply_text(f"Morning digest set to {when} ({self.tz_name}).")
+        await update.message.reply_text(
+            f"Digest set for {', '.join(bot_data['digest_times'])} ({self.tz_name})."
+        )
 
     def _reschedule_digest(self, app: Application) -> None:
         for job in app.job_queue.get_jobs_by_name("digest"):
             job.schedule_removal()
         if not app.bot_data.get("digest_enabled", True):
             return
-        hour, minute = map(int, app.bot_data.get("digest_time", DEFAULT_DIGEST_TIME).split(":"))
-        app.job_queue.run_daily(
-            self._digest_job,
-            time=dt_time(hour=hour, minute=minute, tzinfo=ZoneInfo(self.tz_name)),
-            name="digest",
-        )
-        self.logger.info("Digest scheduled for %02d:%02d %s", hour, minute, self.tz_name)
+        times = self._digest_times(app.bot_data)
+        for when in times:
+            hour, minute = map(int, when.split(":"))
+            app.job_queue.run_daily(
+                self._digest_job,
+                time=dt_time(hour=hour, minute=minute, tzinfo=ZoneInfo(self.tz_name)),
+                name="digest",
+            )
+        self.logger.info("Digest scheduled for %s %s", ", ".join(times), self.tz_name)
 
     # The run+deliver half goes through the channel-neutral core.tasks seam; only the
     # scheduling/config stays here. The *instructions* live in the editable Agent/
@@ -333,17 +374,20 @@ class TelegramFrontend:
         if not context.args:
             enabled = bot_data.get("heartbeat_enabled", False)
             every = bot_data.get("heartbeat_interval_label", "—")
-            status = f"on, every {every}" if enabled else "off"
+            window = bot_data.get("heartbeat_window_label") or "all day"
+            status = f"on, every {every}, active {window}" if enabled else "off"
             await update.message.reply_text(
-                f"Heartbeat is <b>{status}</b>. It runs your <code>heartbeat.md</code> "
-                "instructions on an interval and only messages you if something needs "
-                "attention.\nUse <code>/heartbeat 30m</code> (s/m/h/d), "
-                "<code>/heartbeat off</code>, or <code>/heartbeat now</code> to test it.",
+                f"Heartbeat is <b>{status}</b> ({self.tz_name}). It runs your "
+                "<code>heartbeat.md</code> on an interval (only during the active window) "
+                "and pings you only if something needs attention.\n"
+                "Set it: <code>/heartbeat 30m</code>, <code>/heartbeat 30m 08:00-22:00</code> "
+                "(interval + active window), <code>/heartbeat allday</code>, "
+                "<code>/heartbeat off</code>, or <code>/heartbeat now</code> to test.",
                 parse_mode="HTML",
             )
             return
-        arg = context.args[0].strip().lower()
-        if arg == "now":
+        args = [a.strip().lower() for a in context.args]
+        if args == ["now"]:
             # Fire once immediately, for testing — reports the outcome inline.
             await update.message.reply_text("Running the heartbeat now…")
             try:
@@ -357,22 +401,52 @@ class TelegramFrontend:
                     "Heartbeat ran — nothing noteworthy right now."
                 )
             return
-        if arg == "off":
+        if args == ["off"]:
             bot_data["heartbeat_enabled"] = False
             self._reschedule_heartbeat(context.application)
             await update.message.reply_text("Heartbeat turned off.")
             return
-        seconds = parse_interval(arg)
-        if not seconds:
+
+        # Tokens may be an interval, an active window (HH:MM-HH:MM), and/or 'allday'.
+        interval = window = None
+        clear_window = False
+        unknown = []
+        for tok in args:
+            if tok in ("allday", "all", "24/7"):
+                clear_window = True
+            elif parse_interval(tok):
+                interval = tok
+            elif parse_range(tok):
+                window = tok
+            else:
+                unknown.append(tok)
+        if unknown:
             await update.message.reply_text(
-                "Usage: /heartbeat <interval> like 30m, 2h, 45s, 1d — or /heartbeat off"
+                "Usage: /heartbeat <interval> [HH:MM-HH:MM] — e.g. 30m, or "
+                "30m 08:00-22:00; also allday / off / now"
             )
             return
-        bot_data["heartbeat_enabled"] = True
-        bot_data["heartbeat_interval"] = seconds
-        bot_data["heartbeat_interval_label"] = arg
+        if interval:
+            bot_data["heartbeat_interval"] = parse_interval(interval)
+            bot_data["heartbeat_interval_label"] = interval
+            bot_data["heartbeat_enabled"] = True
+        if clear_window:
+            bot_data["heartbeat_window"] = None
+            bot_data["heartbeat_window_label"] = None
+        elif window:
+            bot_data["heartbeat_window"] = parse_range(window)
+            bot_data["heartbeat_window_label"] = window
+        if not bot_data.get("heartbeat_interval"):
+            await update.message.reply_text(
+                "Set an interval first, e.g. /heartbeat 30m (optionally with a window)."
+            )
+            return
         self._reschedule_heartbeat(context.application)
-        await update.message.reply_text(f"Heartbeat set to run every {arg}.")
+        every = bot_data.get("heartbeat_interval_label")
+        win = bot_data.get("heartbeat_window_label") or "all day"
+        await update.message.reply_text(
+            f"Heartbeat set: every {every}, active {win} ({self.tz_name})."
+        )
 
     def _reschedule_heartbeat(self, app: Application) -> None:
         for job in app.job_queue.get_jobs_by_name("heartbeat"):
@@ -395,6 +469,12 @@ class TelegramFrontend:
         )
 
     async def _heartbeat_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        window = context.application.bot_data.get("heartbeat_window")
+        if window:
+            now = datetime.now(ZoneInfo(self.tz_name))
+            if not in_window(now.hour * 60 + now.minute, window[0], window[1]):
+                self.logger.info("Heartbeat skipped — outside active window")
+                return
         self.logger.info("Heartbeat firing (scheduled)")
         try:
             delivered = await self._run_heartbeat_once(context.bot)
@@ -425,8 +505,8 @@ class TelegramFrontend:
         await app.bot.set_my_commands([
             BotCommand("inbox", "Unread emails with action buttons"),
             BotCommand("fetchemails", "Triaged summary of latest emails"),
-            BotCommand("digest", "View/set the morning digest"),
-            BotCommand("heartbeat", "View/set the recurring heartbeat"),
+            BotCommand("digest", "View/set digest times (e.g. 07:30 21:00)"),
+            BotCommand("heartbeat", "View/set the heartbeat (interval + active window)"),
         ])
         app.bot_data.setdefault("digest_enabled", True)
         app.bot_data.setdefault("digest_time", DEFAULT_DIGEST_TIME)
