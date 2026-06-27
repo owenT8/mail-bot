@@ -14,6 +14,7 @@ Run from the repo root with your real .env:
 
 import sys
 import traceback
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,6 +29,17 @@ def main() -> None:
     if not mc.accounts:
         print("No mail accounts configured (check .env).")
         return
+    print("Configured accounts:", [a.label for a in mc.accounts])
+
+    # The EXACT path the agent uses — does it see unread from BOTH accounts?
+    print("\n========== getUnreadEmails() (the agent's path) ==========")
+    try:
+        unread = mc.getUnreadEmails()
+        print("returned", len(unread), "unread:", dict(Counter(e["account"] for e in unread)))
+        for e in unread[:10]:
+            print(f"   [{e['account']}] uid={e['uid']!r} {(e['subject'] or '')[:45]!r}")
+    except Exception:
+        traceback.print_exc()
 
     for acc in mc.accounts:
         print(f"\n===================== {acc.label}  ({acc.host}) =====================")
