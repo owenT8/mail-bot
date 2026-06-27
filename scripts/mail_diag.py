@@ -66,6 +66,21 @@ def main() -> None:
                 inbox_uids = set(mb.uids())
                 print(f"INBOX UID count: {len(inbox_uids)}")
 
+                print("UNREAD / TOTAL PER FOLDER (where your mail actually is):")
+                for f in mb.folder.list():
+                    try:
+                        mb.folder.set(f.name)
+                        total = len(mb.uids())
+                        unread = len(mb.uids(AND(seen=False)))
+                        if total or unread:
+                            print(f"   {f.name!r}: {unread} unread / {total} total")
+                    except Exception as e:
+                        print(f"   {f.name!r}: <error {e}>")
+                try:
+                    mb.folder.set("INBOX")
+                except Exception:
+                    pass
+
                 msgs = list(mb.fetch(AND(seen=False), mark_seen=False, limit=5, reverse=True))
                 print(f"Up to 5 unread (the UIDs the agent would act on):")
                 for m in msgs:
