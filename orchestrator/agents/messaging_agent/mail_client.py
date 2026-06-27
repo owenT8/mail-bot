@@ -258,15 +258,16 @@ class MailClient:
         mark_seen: bool,
         create_if_missing: bool = False,
     ) -> tuple[int, list[str]]:
-        """Move a batch of {uid, account} emails out of the inbox to each account's
-        `kind` folder, setting read/unread first, and VERIFYING they left the inbox.
+        """Take a batch of {uid, account} emails out of the inbox, per account, setting
+        read/unread first and VERIFYING they actually left the inbox.
 
-        Grouped by account (one connection each). Read state is set while the message
-        is still in the inbox so it carries to the destination. Gmail's "Important" is
-        a label, not a real folder, so moving there doesn't drop the inbox label — for
-        Gmail we additionally archive (to All Mail) anything that's still in the inbox,
-        which reliably removes it. Failures (and any message that didn't actually leave
-        the inbox) are reported per account instead of being silently swallowed.
+        Provider-specific, because Gmail's folders are LABELS, not real folders, and
+        imap_tools' move (copy + \\Deleted + expunge) handles them unreliably:
+          - Gmail: use native X-GM-LABELS — archive removes the \\Inbox label; important
+            adds the "Important" label then removes \\Inbox. (Everything stays in All Mail.)
+          - iCloud / other: move to the real `kind` folder (created if missing).
+        Read state is set while the message is still in the inbox so it carries over.
+        Anything that didn't actually leave the inbox is reported per account.
 
         Returns (count_moved, errors).
         """
@@ -279,25 +280,29 @@ class MailClient:
         errors: list[str] = []
         for label, uids in by_account.items():
             account = self._account(label)
-            folder = self._special_folder(label, kind)
             try:
                 with self._mailbox(account) as mailbox:
                     # Set read/unread while still in the inbox so it carries over.
                     mailbox.flag(uids, MailMessageFlags.SEEN, mark_seen)
-                    if create_if_missing and not mailbox.folder.exists(folder):
-                        try:
-                            mailbox.folder.create(folder)
-                        except Exception as e:
-                            logger.info(
-                                "Skipped creating folder %r in %s: %s", folder, label, e
-                            )
-                    mailbox.move(uids, folder)
+                    if label == "gmail":
+                        self._gmail_organize(mailbox, uids, kind)
+                        dest = f"Gmail labels ({kind})"
+                    else:
+                        dest = self._special_folder(label, kind)
+                        if create_if_missing and not mailbox.folder.exists(dest):
+                            try:
+                                mailbox.folder.create(dest)
+                            except Exception as e:
+                                logger.info(
+                                    "Skipped creating folder %r in %s: %s", dest, label, e
+                                )
+                        mailbox.move(uids, dest)
                     still_in_inbox = self._uids_present(mailbox, uids)
                 moved_here = len(uids) - len(still_in_inbox)
                 moved += moved_here
                 logger.info(
-                    "Organized %d/%d email(s) to %r in %s (mark_seen=%s)",
-                    moved_here, len(uids), folder, label, mark_seen,
+                    "Organized %d/%d email(s) to %s in %s (mark_seen=%s)",
+                    moved_here, len(uids), dest, label, mark_seen,
                 )
                 if still_in_inbox:
                     errors.append(
@@ -305,11 +310,26 @@ class MailClient:
                     )
             except Exception as e:
                 logger.error(
-                    "Failed to organize %d email(s) to %r in %s: %s",
-                    len(uids), folder, label, e, exc_info=True,
+                    "Failed to organize %d email(s) (%s) in %s: %s",
+                    len(uids), kind, label, e, exc_info=True,
                 )
                 errors.append(f"{label}: {e}")
         return moved, errors
+
+    @staticmethod
+    def _gmail_store(mailbox, uids: list[str], op: str, value: str) -> None:
+        """Issue a raw Gmail X-GM-LABELS STORE (label add/remove) for a UID set."""
+        uid_set = ",".join(str(u) for u in uids)
+        typ, data = mailbox.client.uid("STORE", uid_set, op, value)
+        if typ != "OK":
+            raise RuntimeError(f"Gmail STORE {op} {value} failed: {data}")
+
+    def _gmail_organize(self, mailbox, uids: list[str], kind: str) -> None:
+        """Organize Gmail mail via labels: 'important' adds the Important label; both
+        archive and important drop the \\Inbox label so the message leaves the inbox."""
+        if kind == "important":
+            self._gmail_store(mailbox, uids, "+X-GM-LABELS", '("Important")')
+        self._gmail_store(mailbox, uids, "-X-GM-LABELS", "(\\Inbox)")
 
     @staticmethod
     def _uids_present(mailbox, uids: list[str]) -> set[str]:

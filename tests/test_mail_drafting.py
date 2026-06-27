@@ -66,9 +66,25 @@ class _FakeFolderMgr:
         self.existing.add(name)
 
 
+class _FakeGmailClient:
+    """Stands in for imap_tools' raw imaplib client — records X-GM-LABELS STOREs and
+    drops uids from the inbox when the \\Inbox label is removed."""
+
+    def __init__(self, mailbox):
+        self.mailbox = mailbox
+        self.stores = []  # (command, uid_set, op, value)
+
+    def uid(self, command, uid_set, op, value):
+        self.stores.append((command, uid_set, op, value))
+        if op == "-X-GM-LABELS" and "Inbox" in value:
+            self.mailbox.inbox -= set(uid_set.split(","))
+        return ("OK", [b"ok"])
+
+
 class _FakeMailbox:
-    """Models an INBOX: move() removes uids from the inbox unless the destination is
-    a 'sticky' folder (simulating Gmail's Important label, which doesn't drop \\Inbox)."""
+    """Models an INBOX. iCloud-style move() drops uids from the inbox (unless the
+    destination is 'sticky', simulating a server that accepts a move but doesn't
+    actually remove it). Gmail-style label STOREs go through .client."""
 
     def __init__(self, existing_folders=(), inbox_uids=(), sticky_folders=()):
         self.folder = _FakeFolderMgr(existing_folders)
@@ -76,6 +92,7 @@ class _FakeMailbox:
         self.sticky_folders = set(sticky_folders)
         self.moves = []  # (uids, folder)
         self.flags = []  # (uids, flag, value)
+        self.client = _FakeGmailClient(self)
 
     def __enter__(self):
         return self
@@ -104,20 +121,42 @@ def _client(mailboxes_by_label):
     return mc
 
 
-def test_archive_batches_by_account_and_marks_read():
-    gmail = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["1", "2"])
+def test_archive_icloud_moves_and_marks_read():
     icloud = _FakeMailbox(["Archive"], inbox_uids=["3"])
-    mc = _client({"gmail": gmail, "icloud": icloud})
+    mc = _client({"icloud": icloud})
+    out = mc.archiveEmails([{"uid": "3", "account": "icloud"}])
+    assert icloud.moves == [(["3"], "Archive")]  # real folder move
+    assert icloud.inbox == set()  # left the inbox
+    assert all(value is True for (_, _, value) in icloud.flags)  # marked read
+    assert "Archived 1 email" in out and "did not" not in out
+
+
+def test_archive_gmail_uses_labels():
+    # Gmail archive = drop the \Inbox label (no folder move), and mark read.
+    gmail = _FakeMailbox(inbox_uids=["1", "2"])
+    mc = _client({"gmail": gmail})
     out = mc.archiveEmails([
         {"uid": "1", "account": "gmail"},
         {"uid": "2", "account": "gmail"},
-        {"uid": "3", "account": "icloud"},
     ])
-    assert gmail.moves == [(["1", "2"], "[Gmail]/All Mail")]  # one move per account
-    assert icloud.moves == [(["3"], "Archive")]
-    assert gmail.inbox == set() and icloud.inbox == set()  # left the inbox
-    assert all(value is True for (_, _, value) in gmail.flags + icloud.flags)  # marked read
-    assert "Archived 3 email" in out and "did not" not in out
+    assert gmail.moves == []  # no folder move on Gmail
+    assert ("STORE", "1,2", "-X-GM-LABELS", "(\\Inbox)") in gmail.client.stores
+    assert gmail.inbox == set()
+    assert all(value is True for (_, _, value) in gmail.flags)  # marked read
+    assert "Archived 2 email" in out and "did not" not in out
+
+
+def test_important_gmail_uses_labels():
+    # Gmail important = add the Important label AND drop \Inbox; keep unread.
+    gmail = _FakeMailbox(inbox_uids=["5"])
+    mc = _client({"gmail": gmail})
+    out = mc.moveToImportant([{"uid": "5", "account": "gmail"}])
+    assert ("STORE", "5", "+X-GM-LABELS", '("Important")') in gmail.client.stores
+    assert ("STORE", "5", "-X-GM-LABELS", "(\\Inbox)") in gmail.client.stores
+    assert gmail.moves == []
+    assert gmail.inbox == set()
+    assert all(value is False for (_, _, value) in gmail.flags)  # unread
+    assert "Moved to Important: 1 email" in out and "did not" not in out
 
 
 def test_important_icloud_creates_folder_and_marks_unread():
@@ -133,18 +172,6 @@ def test_important_icloud_creates_folder_and_marks_unread():
     assert all(value is False for (_, _, value) in mb.flags)  # marked UNREAD
 
 
-def test_important_gmail_targets_writable_label():
-    # Gmail "important" goes to the plain, writable "Important" label (NOT the
-    # unwritable system [Gmail]/Important), in a single move that leaves the inbox.
-    gmail = _FakeMailbox(existing_folders=["Important"], inbox_uids=["5"])
-    mc = _client({"gmail": gmail})
-    out = mc.moveToImportant([{"uid": "5", "account": "gmail"}])
-    assert gmail.moves == [(["5"], "Important")]
-    assert gmail.inbox == set()
-    assert all(value is False for (_, _, value) in gmail.flags)  # unread
-    assert "Moved to Important: 1 email" in out and "did not" not in out
-
-
 def test_organize_detects_silent_no_op():
     # The move is accepted but the message stays in the inbox (the iCloud symptom).
     # Verification via uids() catches it instead of falsely reporting success.
@@ -156,13 +183,13 @@ def test_organize_detects_silent_no_op():
 
 
 def test_organize_reports_per_account_failure_without_aborting():
-    good = _FakeMailbox(["Archive"], inbox_uids=["1"])
-    bad = _FakeMailbox(["[Gmail]/All Mail"], inbox_uids=["2"])
+    good = _FakeMailbox(["Archive"], inbox_uids=["1"])  # icloud
+    bad = _FakeMailbox(inbox_uids=["2"])  # gmail
 
-    def boom(uids, folder):
+    def boom(*a):
         raise RuntimeError("imap error")
 
-    bad.move = boom
+    bad.client.uid = boom  # Gmail label STORE fails
     mc = _client({"icloud": good, "gmail": bad})
     out = mc.archiveEmails([
         {"uid": "1", "account": "icloud"},
